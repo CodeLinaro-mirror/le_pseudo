@@ -10,6 +10,7 @@
 opt_prefix=
 opt_libdir=
 opt_suffix=
+opt_target=
 opt_arch=x86
 opt_bits=
 opt_sqlite=/usr
@@ -32,6 +33,7 @@ usage()
     echo >&2 "  configure --prefix=..."
     echo >&2 "           [--libdir=...]"
     echo >&2 "           [--suffix=...]"
+    echo >&2 "           [--target=...]"
     echo >&2 "           [--enable-memory-db]"
     echo >&2 "           [--enable-epoll]"
     echo >&2 "           [--enable-xattr]"
@@ -152,6 +154,9 @@ do
         ;;
     --suffix=*)
         opt_suffix=${arg#--suffix=}
+        ;;
+    --target=*)
+        opt_target=${arg#--target=}
         ;;
     --arch=*)
         echo >&2 "WARNING: The --arch option is now deprecated. Use --cflags."
@@ -341,6 +346,7 @@ sed -e '
   s,@LIBDIR@,'"$opt_libdir"',g
   s,@LIB@,'"$opt_lib"',g
   s,@SUFFIX@,'"$opt_suffix"',g
+  s,@TARGET@,'"$opt_target"',g
   s,@SQLITE@,'"$opt_sqlite"',g
   s,@ARCH_FLAGS@,'"$arch_flags"',g
   s,@DEFAULT_SQLITE@,'"$default_sqlite"',g

@@ -15,6 +15,13 @@ import platform
 import subprocess
 from templatefile import TemplateFile
 
+# Set from --target=, empty means the machine running this script
+target_arch = ""
+
+def wrapper_arch():
+    """Architecture the wrappers are built for: the --target cpu or the build machine."""
+    return target_arch or platform.machine()
+
 class ArgumentList:
     """A (possibly empty) list of arguments"""
 
@@ -316,11 +323,11 @@ class Function:
             # Strip all leading/trailing whitespace
             modifiers = {k.strip():v.strip() for k, v in modifiers.items()}
 
-            arch = "-" + platform.machine()
+            arch = "-" + wrapper_arch()
             # Sorted so that versions-foo appear after versions, so overrides are easy
             for key in sorted(modifiers):
                 value = modifiers[key].replace('<equals>', '==')
-                # If the key is version-arm64 and we're on arm64 then rename this to version
+                # If the key is version-arm64 and we're building for arm64 then rename this to version
                 if key.endswith(arch):
                     key = key.replace(arch, "")
                 setattr(self, key, value)
@@ -664,10 +671,15 @@ def process_wrapfuncs(port):
 
 def main(argv):
     """Read in function definitions, write out files based on templates."""
+    global target_arch
     funcs = []
     sources = []
 
     for arg in argv:
+        if arg.startswith('--target='):
+            # A GNU triplet such as aarch64-poky-linux, only the cpu part is used
+            target_arch = arg[len('--target='):].split('-')[0]
+            continue
         if '=' not in arg:
             print("Invalid argument '%s', must be of the form name=value" % arg)
             exit(1)
@@ -697,6 +709,7 @@ def main(argv):
     port = Port('common', sources)
 
     # the per-function stuff
+    print("Architecture for wrapper modifiers: %s" % wrapper_arch())
     print("Writing functions...")
     all_funcs = port.functions()
     for name in sorted(all_funcs.keys()):
