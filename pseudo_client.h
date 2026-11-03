@@ -25,7 +25,6 @@ extern void pseudo_antimagic(void);
 extern void pseudo_magic(void);
 extern void pseudo_client_touchuid(void);
 extern void pseudo_client_touchgid(void);
-extern char *pseudo_client_fdpath(int fd);
 extern int pseudo_client_shutdown(int);
 extern int pseudo_fd(int fd, int how);
 #define MOVE_FD	0
