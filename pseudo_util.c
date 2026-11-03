@@ -99,6 +99,8 @@ static int pseudo_util_initted = -1;  /* Not yet run */
 
 /* bypass wrapper logic on path computations */
 int (*pseudo_real_lstat)(const char *path, PSEUDO_STATBUF *buf) = NULL;
+int (*pseudo_real_fstat)(int fd, PSEUDO_STATBUF *buf) = NULL;
+int (*pseudo_real_stat)(const char *path, PSEUDO_STATBUF *buf) = NULL;
 /* bash workaround */
 int (*pseudo_real_unsetenv)(const char *) = unsetenv;
 char * (*pseudo_real_getenv)(const char *) = getenv;

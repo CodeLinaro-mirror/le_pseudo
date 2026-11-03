@@ -51,6 +51,8 @@ extern FILE *pseudo_grp;
 
 /* pseudo_wrappers will try to initialize these */
 extern int (*pseudo_real_lstat)(const char *path, PSEUDO_STATBUF *buf);
+extern int (*pseudo_real_fstat)(int fd, PSEUDO_STATBUF *buf);
+extern int (*pseudo_real_stat)(const char *path, PSEUDO_STATBUF *buf);
 extern int (*pseudo_real_fork)(void);
 extern int (*pseudo_real_execv)(const char *, char * const *);
 

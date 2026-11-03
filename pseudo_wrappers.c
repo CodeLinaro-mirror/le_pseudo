@@ -174,6 +174,8 @@ pseudo_init_wrappers(void) {
 	pseudo_real_fsetxattr = real_fsetxattr;
 #endif
 	pseudo_real_lstat = base_lstat;
+	pseudo_real_fstat = base_fstat;
+	pseudo_real_stat = base_stat;
 	/* and these are used so the client's server spawn can bypass
 	 * wrappers.
 	 */

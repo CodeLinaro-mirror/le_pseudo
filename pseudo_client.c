@@ -1422,12 +1422,112 @@ pseudo_client_shutdown(int wait_on_socket) {
 	return 0;
 }
 
+/* /proc/self/fd/<n>, /proc/<pid>/fd/<n> and /dev/fd/<n> denote the open file,
+ * not the path the magic link prints.  Canonicalization resolves symlinks with
+ * readlink(2), which changes the meaning of such a path: the kernel resolves it
+ * to the descriptor, so an O_PATH|O_NOFOLLOW descriptor on a symlink addresses
+ * the symlink itself, whereas the expansion yields the link target and then
+ * follows it.  That labels the wrong inode, or fails when the target does not
+ * resolve.
+ *
+ * Rewrite the reference to the path pseudo recorded for the descriptor, which
+ * also puts the operation under pseudo's control instead of passing it through.
+ * The descriptor itself identifies the inode, so the final component is only
+ * followed when following it is what reproduces that inode, i.e. for a
+ * descriptor obtained through a symlink.  Returns NULL to leave the path alone.
+ */
+static char *
+rewrite_proc_fd_ref(const char *path, int *leave_last) {
+	const char *p;
+	const char *digits;
+	const char *recpath;
+	char *out;
+	PSEUDO_STATBUF fbuf, pbuf;
+	int fd = 0;
+
+	if (!path || path[0] != '/')
+		return NULL;
+
+	if (!strncmp(path, "/dev/fd/", 8)) {
+		p = path + 8;
+	} else if (!strncmp(path, "/proc/", 6)) {
+		p = path + 6;
+		if (!strncmp(p, "self/fd/", 8)) {
+			p += 8;
+		} else if (!strncmp(p, "thread-self/fd/", 15)) {
+			p += 15;
+		} else {
+			const char *q = p;
+
+			while (*q >= '0' && *q <= '9')
+				++q;
+			if (q == p || strncmp(q, "/fd/", 4))
+				return NULL;
+			p = q + 4;
+		}
+	} else {
+		return NULL;
+	}
+
+	digits = p;
+	while (*p >= '0' && *p <= '9') {
+		if (fd > (0x7fffffff - 9) / 10)
+			return NULL;
+		fd = fd * 10 + (*p - '0');
+		++p;
+	}
+	if (p == digits || (*p != '\0' && *p != '/'))
+		return NULL;
+
+	recpath = fd_path(fd);
+	if (!recpath || recpath[0] != '/')
+		return NULL;
+
+	/* Within a chroot the recorded path carries the chroot prefix, while
+	 * base_path() adds that prefix to absolute paths.  Strip it, or give up
+	 * if the descriptor is not inside the chroot.
+	 */
+	if (pseudo_chroot_len) {
+		if (strncmp(recpath, pseudo_chroot, pseudo_chroot_len) ||
+		    (recpath[pseudo_chroot_len] != '\0' && recpath[pseudo_chroot_len] != '/'))
+			return NULL;
+		recpath += pseudo_chroot_len;
+		if (*recpath == '\0')
+			recpath = "/";
+	}
+
+	if (*p != '\0') {
+		size_t len = strlen(recpath) + strlen(p) + 1;
+
+		out = malloc(len);
+		if (!out)
+			return NULL;
+		snprintf(out, len, "%s%s", recpath, p);
+		return out;
+	}
+
+	if (!pseudo_real_fstat || !pseudo_real_lstat)
+		return NULL;
+	if (pseudo_real_fstat(fd, &fbuf) == -1)
+		return NULL;
+	if (pseudo_real_lstat(recpath, &pbuf) == 0 &&
+	    pbuf.st_dev == fbuf.st_dev && pbuf.st_ino == fbuf.st_ino) {
+		*leave_last = 1;
+	} else if (pseudo_real_stat == NULL || pseudo_real_stat(recpath, &pbuf) == -1 ||
+		   pbuf.st_dev != fbuf.st_dev || pbuf.st_ino != fbuf.st_ino) {
+		/* The recorded path no longer describes this descriptor. */
+		return NULL;
+	}
+	return strdup(recpath);
+}
+
 static char *
 base_path(int dirfd, const char *path, int leave_last) {
 	char *basepath = 0;
 	size_t baselen = 0;
 	size_t minlen = 0;
 	char *newpath;
+	char *rewritten;
 
 	if (!path)
 		return NULL;
@@ -1472,7 +1572,17 @@ base_path(int dirfd, const char *path, int leave_last) {
 		minlen = pseudo_chroot_len;
 	}
 
+	/* Only when the caller follows the final component.  With
+	 * AT_SYMLINK_NOFOLLOW the reference itself is what the caller asks
+	 * about (readlink, lstat, l*xattr), so it must be left for the kernel
+	 * to resolve.
+	 */
+	rewritten = leave_last ? NULL : rewrite_proc_fd_ref(path, &leave_last);
+	if (rewritten)
+		path = rewritten;
+
 	newpath = pseudo_fix_path(basepath, path, minlen, baselen, NULL, leave_last);
+	free(rewritten);
 	pseudo_debug(PDBGF_PATH, "base_path[%s]: %s</>%s => %s\n",
 		leave_last ? "nofollow" : "follow",
 		basepath ? basepath : "<nil>",
