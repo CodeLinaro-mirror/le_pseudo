@@ -150,6 +150,17 @@ static void cleanup(void) {
 }
 
 int main(void) {
+    int probefd;
+
+    probefd = do_open_tree_attr_syscall(AT_FDCWD, ".", 0);
+    if (probefd == -1 && errno == ENOSYS) {
+        fprintf(stderr, "open_tree_attr syscall not supported, skipping.\n");
+        return 77;
+    }
+    if (probefd != -1) {
+        close(probefd);
+    }
+
     cleanup();
 
     if (mkdir(TEST_DIR, 0777) == -1) {

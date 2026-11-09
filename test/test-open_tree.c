@@ -10,6 +10,14 @@
 #define TEST_DIR "test-open-tree-dir"
 #define TEST_FILE "test-open-tree-file"
 
+/*
+ * Older glibc versions (< 2.36) do not provide open_tree().  Declare it
+ * weak so the test still links; at runtime it resolves to glibc's or
+ * libpseudo's open_tree if either provides it, otherwise it is NULL and
+ * the test is skipped.
+ */
+extern int open_tree(int dirfd, const char *path, unsigned int flags) __attribute__((weak));
+
 static int test_no_flags(void) {
     int treefd = -1;
     int fd = -1;
@@ -124,6 +132,23 @@ static void cleanup(void) {
 }
 
 int main(void) {
+    int probefd;
+
+    if (!open_tree) {
+        fprintf(stderr, "open_tree() not available, skipping.\n");
+        return 77;
+    }
+
+    /* pseudo exports open_tree() but returns ENOSYS if libc lacks it */
+    probefd = open_tree(AT_FDCWD, ".", 0);
+    if (probefd == -1 && errno == ENOSYS) {
+        fprintf(stderr, "open_tree() returned ENOSYS, skipping.\n");
+        return 77;
+    }
+    if (probefd != -1) {
+        close(probefd);
+    }
+
     cleanup();
 
     if (mkdir(TEST_DIR, 0777) == -1) {
