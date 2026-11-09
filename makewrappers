@@ -580,17 +580,17 @@ additional ports to include.
             prefuncs = pre.functions()
             for name in prefuncs.keys():
                 if name in mergedfuncs:
-                    print("Warning: %s from %s overriding %s" % (name, pre.name, mergedfuncs[name].port))
+                    print("Info: %s from %s overriding %s" % (name, pre.name, mergedfuncs[name].port))
                 mergedfuncs[name] = prefuncs[name]
         for name in self.funcs.keys():
             if name in mergedfuncs:
-                print("Warning: %s from %s overriding %s" % (name, self.name, mergedfuncs[name].port))
+                print("Info: %s from %s overriding %s" % (name, self.name, mergedfuncs[name].port))
             mergedfuncs[name] = self.funcs[name]
         for sub in self.subports:
             subfuncs = sub.functions()
             for name in subfuncs.keys():
                 if name in mergedfuncs:
-                    print("Warning: %s from %s overriding %s" % (name, sub.name, mergedfuncs[name].port))
+                    print("Info: %s from %s overriding %s" % (name, sub.name, mergedfuncs[name].port))
                 mergedfuncs[name] = subfuncs[name]
         return mergedfuncs
 
