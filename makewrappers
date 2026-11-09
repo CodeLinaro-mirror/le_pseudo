@@ -380,7 +380,8 @@ class Function:
         return self.args.call()
 
     def paths_decl(self):
-        if self.preserve_paths:
+        # path_int is only read by the ignore_paths() check
+        if self.preserve_paths and not self.noignore_path:
             return "\n\t".join("char *" + path + "_int;" for path in self.paths_to_munge)
         return ""
 
@@ -411,6 +412,9 @@ class Function:
                     "\t\t\t%s -1;\n"
                     "\t\t\tgoto quick_exit;\n"
                     "\t\t}\n" % (path, self.rc_assign()))
+            if self.preserve_paths and self.noignore_path:
+                # path_int is only read by the ignore_paths() check
+                continue
             fix_paths.append(
                 "%s = pseudo_root_path(__func__, __LINE__, %s%s, %s, %s);" %
                 (pathvar, prefix, self.dirfd, path, self.flags))
