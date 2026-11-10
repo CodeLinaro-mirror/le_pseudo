@@ -1516,9 +1516,25 @@ rewrite_proc_fd_ref(const char *path, int *leave_last) {
 			recpath = "/";
 	}
 
-	if (*p != '\0') {
-		size_t len = strlen(recpath) + strlen(p) + 1;
+	if (!pseudo_real_fstat || !pseudo_real_lstat || !pseudo_real_stat)
+		return NULL;
+	if (pseudo_real_fstat(fd, &fbuf) == -1)
+		return NULL;
 
+	if (*p != '\0') {
+		size_t len;
+
+		/* A trailing path is resolved below the descriptor, which only
+		 * works for a directory, and only if the recorded path still
+		 * names that directory.  Path walking follows symlinks, so
+		 * compare with stat(), not lstat().
+		 */
+		if (!S_ISDIR(fbuf.st_mode) ||
+		    pseudo_real_stat(recpath, &pbuf) == -1 ||
+		    pbuf.st_dev != fbuf.st_dev || pbuf.st_ino != fbuf.st_ino)
+			return NULL;
+
+		len = strlen(recpath) + strlen(p) + 1;
 		out = malloc(len);
 		if (!out)
 			return NULL;
@@ -1526,14 +1542,10 @@ rewrite_proc_fd_ref(const char *path, int *leave_last) {
 		return out;
 	}
 
-	if (!pseudo_real_fstat || !pseudo_real_lstat)
-		return NULL;
-	if (pseudo_real_fstat(fd, &fbuf) == -1)
-		return NULL;
 	if (pseudo_real_lstat(recpath, &pbuf) == 0 &&
 	    pbuf.st_dev == fbuf.st_dev && pbuf.st_ino == fbuf.st_ino) {
 		*leave_last = 1;
-	} else if (pseudo_real_stat == NULL || pseudo_real_stat(recpath, &pbuf) == -1 ||
+	} else if (pseudo_real_stat(recpath, &pbuf) == -1 ||
 		   pbuf.st_dev != fbuf.st_dev || pbuf.st_ino != fbuf.st_ino) {
 		/* The recorded path no longer describes this descriptor. */
 		return NULL;
