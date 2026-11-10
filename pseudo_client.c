@@ -1528,6 +1528,7 @@ base_path(int dirfd, const char *path, int leave_last) {
 	size_t minlen = 0;
 	char *newpath;
 	char *rewritten;
+	const char *orig_path = path;
 
 	if (!path)
 		return NULL;
@@ -1582,12 +1583,12 @@ base_path(int dirfd, const char *path, int leave_last) {
 		path = rewritten;
 
 	newpath = pseudo_fix_path(basepath, path, minlen, baselen, NULL, leave_last);
-	free(rewritten);
 	pseudo_debug(PDBGF_PATH, "base_path[%s]: %s</>%s => %s\n",
 		leave_last ? "nofollow" : "follow",
 		basepath ? basepath : "<nil>",
-		path ? path : "<nil>",
+		orig_path ? orig_path : "<nil>",
 		newpath ? newpath : "<nil>");
+	free(rewritten);
 	return newpath;
 }
 
