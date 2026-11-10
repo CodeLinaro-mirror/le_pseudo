@@ -1440,6 +1440,9 @@ pseudo_client_shutdown(int wait_on_socket) {
  * pseudo only knows this process's descriptors, so /proc/<pid>/fd/<n> is only
  * rewritten when <pid> is the calling process or thread.  References to other
  * processes are left alone.
+ *
+ * Within a chroot, absolute paths including /proc and /dev are relative to the
+ * chroot directory, so such references are left alone as well.
  */
 static char *
 rewrite_proc_fd_ref(const char *path, int *leave_last) {
@@ -1451,6 +1454,9 @@ rewrite_proc_fd_ref(const char *path, int *leave_last) {
 	int fd = 0;
 
 	if (!path || path[0] != '/')
+		return NULL;
+
+	if (pseudo_chroot_len)
 		return NULL;
 
 	if (!strncmp(path, "/dev/fd/", 8)) {
@@ -1502,19 +1508,6 @@ rewrite_proc_fd_ref(const char *path, int *leave_last) {
 	recpath = fd_path(fd);
 	if (!recpath || recpath[0] != '/')
 		return NULL;
-
-	/* Within a chroot the recorded path carries the chroot prefix, while
-	 * base_path() adds that prefix to absolute paths.  Strip it, or give up
-	 * if the descriptor is not inside the chroot.
-	 */
-	if (pseudo_chroot_len) {
-		if (strncmp(recpath, pseudo_chroot, pseudo_chroot_len) ||
-		    (recpath[pseudo_chroot_len] != '\0' && recpath[pseudo_chroot_len] != '/'))
-			return NULL;
-		recpath += pseudo_chroot_len;
-		if (*recpath == '\0')
-			recpath = "/";
-	}
 
 	if (!pseudo_real_fstat || !pseudo_real_lstat || !pseudo_real_stat)
 		return NULL;
