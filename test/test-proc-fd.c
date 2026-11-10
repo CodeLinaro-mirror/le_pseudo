@@ -9,6 +9,10 @@
  * leave the target alone.  A descriptor opened by following a symlink
  * denotes the target, so the context must land there instead.
  *
+ * /proc/<pid>/fd/<n> naming this process must behave like /proc/self, while
+ * naming another process must address that process's descriptor, not the
+ * one this process has open under the same number.
+ *
  * Exit status: 0 all checks passed, 1 a check failed, 255 skipped because
  * the platform has no xattr support.
  */
@@ -21,6 +25,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/xattr.h>
 
 #define CTX "security.selinux"
@@ -83,6 +88,75 @@ set_via_fd(int fd, const char *value)
 
 	snprintf(path, sizeof path, "/proc/self/fd/%d", fd);
 	return setxattr(path, CTX, value, strlen(value) + 1, 0);
+}
+
+/* As set_via_fd(), but naming the process by number. */
+static int
+set_via_pid_fd(pid_t pid, int fd, const char *value)
+{
+	char path[64];
+
+	snprintf(path, sizeof path, "/proc/%ld/fd/%d", (long) pid, fd);
+	return setxattr(path, CTX, value, strlen(value) + 1, 0);
+}
+
+/* Set a context through another process's descriptor <fd>, which refers to
+ * "theirs" in the child, while this process's descriptor <fd> refers to
+ * "mine".  Returns -1 if the setup failed.
+ */
+static int
+set_via_other_process(const char *dir, int fd, const char *value)
+{
+	char path[512];
+	int ready[2], release[2];
+	pid_t child;
+	char c;
+	int rc, status;
+
+	if (pipe(ready) == -1 || pipe(release) == -1) {
+		perror("pipe");
+		return -1;
+	}
+	child = fork();
+	if (child == -1) {
+		perror("fork");
+		return -1;
+	}
+	if (child == 0) {
+		int other;
+
+		close(ready[0]);
+		close(release[1]);
+		snprintf(path, sizeof path, "%s/theirs", dir);
+		other = open(path, O_RDONLY);
+		if (other == -1 || dup2(other, fd) == -1)
+			_exit(1);
+		close(other);
+		if (write(ready[1], "r", 1) != 1)
+			_exit(1);
+		/* hold the descriptor until the parent is done */
+		while (read(release[0], &c, 1) > 0)
+			;
+		_exit(0);
+	}
+	close(ready[1]);
+	close(release[0]);
+	if (read(ready[0], &c, 1) != 1) {
+		fprintf(stderr, "child failed to set up its descriptor\n");
+		close(release[1]);
+		waitpid(child, &status, 0);
+		return -1;
+	}
+	rc = set_via_pid_fd(child, fd, value);
+	if (rc == -1)
+		fail("context set through another process's descriptor",
+		     strerror(errno));
+	else
+		pass("context set through another process's descriptor");
+	close(ready[0]);
+	close(release[1]);
+	waitpid(child, &status, 0);
+	return 0;
 }
 
 int
@@ -168,6 +242,62 @@ main(int argc, char **argv)
 	expect_ctx("context landed on the target", path, "ontarget");
 	snprintf(path, sizeof path, "%s/link2", dir);
 	expect_ctx("context did not land on the link", path, NULL);
+
+	/* 4. /proc/<other pid>/fd/<n> is the other process's descriptor, not
+	 *    the one this process has open as <n>.
+	 */
+	snprintf(path, sizeof path, "%s/mine", dir);
+	if (close(open(path, O_CREAT | O_WRONLY, 0644)) == -1) {
+		perror(path);
+		return 1;
+	}
+	snprintf(path, sizeof path, "%s/theirs", dir);
+	if (close(open(path, O_CREAT | O_WRONLY, 0644)) == -1) {
+		perror(path);
+		return 1;
+	}
+	snprintf(path, sizeof path, "%s/mine", dir);
+	fd = open(path, O_RDONLY);
+	if (fd == -1) {
+		perror(path);
+		return 1;
+	}
+	if (set_via_other_process(dir, fd, "onother") == -1)
+		return 1;
+	close(fd);
+
+	snprintf(path, sizeof path, "%s/theirs", dir);
+	expect_ctx("context landed on the other process's file", path, "onother");
+	snprintf(path, sizeof path, "%s/mine", dir);
+	expect_ctx("context did not land on this process's file", path, NULL);
+
+	/* 5. /proc/<own pid>/fd/<n> behaves like /proc/self/fd/<n>. */
+	snprintf(path, sizeof path, "%s/file3", dir);
+	if (close(open(path, O_CREAT | O_WRONLY, 0644)) == -1) {
+		perror(path);
+		return 1;
+	}
+	snprintf(path, sizeof path, "%s/link3", dir);
+	if (symlink("file3", path) == -1) {
+		perror(path);
+		return 1;
+	}
+	fd = open(path, O_PATH | O_NOFOLLOW);
+	if (fd == -1) {
+		perror(path);
+		return 1;
+	}
+	if (set_via_pid_fd(getpid(), fd, "onpidlink") == -1) {
+		fail("context set through /proc/<own pid>/fd", strerror(errno));
+	} else {
+		pass("context set through /proc/<own pid>/fd");
+	}
+	close(fd);
+
+	snprintf(path, sizeof path, "%s/link3", dir);
+	expect_ctx("context landed on the symlink via own pid", path, "onpidlink");
+	snprintf(path, sizeof path, "%s/file3", dir);
+	expect_ctx("context did not land on the target via own pid", path, NULL);
 
 	printf("%s: %d check(s) failed\n", failures ? "FAIL" : "OK", failures);
 	return failures ? 1 : 0;

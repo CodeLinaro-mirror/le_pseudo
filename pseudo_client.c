@@ -37,6 +37,7 @@
 
 /* GNU extension */
 #if PSEUDO_PORT_LINUX
+#include <sys/syscall.h>
 extern char *program_invocation_name;
 #else
 static char *program_invocation_name = "unknown";
@@ -1435,6 +1436,10 @@ pseudo_client_shutdown(int wait_on_socket) {
  * The descriptor itself identifies the inode, so the final component is only
  * followed when following it is what reproduces that inode, i.e. for a
  * descriptor obtained through a symlink.  Returns NULL to leave the path alone.
+ *
+ * pseudo only knows this process's descriptors, so /proc/<pid>/fd/<n> is only
+ * rewritten when <pid> is the calling process or thread.  References to other
+ * processes are left alone.
  */
 static char *
 rewrite_proc_fd_ref(const char *path, int *leave_last) {
@@ -1458,10 +1463,25 @@ rewrite_proc_fd_ref(const char *path, int *leave_last) {
 			p += 15;
 		} else {
 			const char *q = p;
+			long pid = 0;
 
-			while (*q >= '0' && *q <= '9')
+			while (*q >= '0' && *q <= '9') {
+				if (pid > (0x7fffffff - 9) / 10)
+					return NULL;
+				pid = pid * 10 + (*q - '0');
 				++q;
+			}
 			if (q == p || strncmp(q, "/fd/", 4))
+				return NULL;
+			/* fd_path() describes this process's descriptor table
+			 * only; another process's descriptors must be left for
+			 * the kernel to resolve.
+			 */
+			if (pid != getpid()
+#if PSEUDO_PORT_LINUX && defined(SYS_gettid)
+			    && pid != syscall(SYS_gettid)
+#endif
+			   )
 				return NULL;
 			p = q + 4;
 		}
