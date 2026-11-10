@@ -641,26 +641,10 @@ pseudo_file_close(int *fd, FILE **fp) {
 	}
 	pseudo_antimagic();
 	if (*fp) {
-#if PSEUDO_PORT_DARWIN
-		if (*fp == pseudo_host_etc_passwd_file) {
-			endpwent();
-		} else if (*fp != pseudo_host_etc_group_file) {
-			endgrent();
-		} else {
-			fclose(*fp);
-		}
-#else
 		fclose(*fp);
-#endif
 		*fd = -1;
 		*fp = 0;
 	}
-#if PSEUDO_PORT_DARWIN
-	if (*fd == pseudo_host_etc_passwd_fd ||
-	    *fd == pseudo_host_etc_group_fd) {
-		*fd = -1;
-	}
-#endif
 	/* this should be impossible */
 	if (*fd >= 0) {
 		close(*fd);
@@ -678,15 +662,6 @@ pseudo_file_open(char *name, int *fd, FILE **fp) {
 	pseudo_file_close(fd, fp);
 	pseudo_antimagic();
 	*fd = PSEUDO_ETC_FILE(name, NULL, O_RDONLY);
-#if PSEUDO_PORT_DARWIN
-	if (*fd == pseudo_host_etc_passwd_fd) {
-		*fp = pseudo_host_etc_passwd_file;
-		setpwent();
-	} else if (*fd == pseudo_host_etc_group_fd) {
-		*fp = pseudo_host_etc_group_file;
-		setgrent();
-	}
-#endif
 	if (*fd >= 0) {
 		*fd = pseudo_fd(*fd, MOVE_FD);
 		*fp = fdopen(*fd, "r");
@@ -1178,10 +1153,6 @@ client_connect(void) {
 	/* we have a server pid, is it responsive? */
 	struct sockaddr_un sun = { .sun_family = AF_UNIX, .sun_path = PSEUDO_SOCKET };
 	int cwd_fd;
-
-#if PSEUDO_PORT_DARWIN
-	sun.sun_len = strlen(PSEUDO_SOCKET) + 1;
-#endif
 
 	connect_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	connect_fd = pseudo_fd(connect_fd, MOVE_FD);

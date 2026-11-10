@@ -2,10 +2,12 @@ The "ports" system provides functionality for porting pseudo to new targets.
 The original motivation was a requirement to support older and newer Linux
 systems on which the signature for clone() differed.
 
-The Darwin port is totally nonfunctional at this point, but it compiles,
-and sufficiently careful hand-tuning of DYLD_INSERT_LIBRARIES and a
-manually-started server can actually pass a simple test.  It will get
-worked on in my copious free time.
+The Darwin (macOS) port has been removed.  Current macOS strips
+DYLD_INSERT_LIBRARIES from system programs (System Integrity Protection),
+ignores it for hardened and Apple-signed programs, and does not allow
+injecting ordinary libraries into Apple's arm64e programs, so pseudo cannot
+reliably intercept anything there.  To use pseudo on macOS, run it in a
+Linux virtual machine.
 
 The basic design of a port is that it provides a wrapfuncs.in list of
 function signatures, guts implementations, and optionally some port-specific

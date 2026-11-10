@@ -369,38 +369,21 @@ without_libpseudo(char *list) {
 }
 
 static char *
-with_libpseudo(char *list, char *libdir_path) {
+with_libpseudo(char *list) {
 	regmatch_t pmatch[1];
 
 	if (libpseudo_regex_init())
 		return NULL;
 	if ((*real_regexec)(&libpseudo_regex, list, 1, pmatch, 0)) {
 		size_t len;
-#if PSEUDO_PORT_DARWIN
-		/* <%s:%s/%s\0> */
-		len = strlen(list) + 1 + strlen(libdir_path) + 1 + strlen(libpseudo_name) + 1;
-#else
-		/* suppress warning */
-		(void) libdir_path;
 		/* <%s %s\0> */
 		len = strlen(list) + 1 + strlen(libpseudo_name) + 1;
-#endif
 		char *new = malloc(len);
 		if (new) {
 			/* insert space only if there were previous bits */
-			/* on Darwin, we have to provide the full path to
-			 * libpseudo
-			 */
-#if PSEUDO_PORT_DARWIN
-			snprintf(new, len, "%s%s%s/%s", list,
-				*list ? PSEUDO_LINKPATH_SEPARATOR : "",
-				libdir_path ? libdir_path : "",
-				libpseudo_name);
-#else
 			snprintf(new, len, "%s%s%s", list,
 				*list ? PSEUDO_LINKPATH_SEPARATOR : "",
 				libpseudo_name);
-#endif
 		}
 		return new;
 	} else {
@@ -1137,7 +1120,7 @@ pseudo_setupenv() {
 
 	char *ld_preload = GETENV(PRELINK_LIBRARIES);
 	if (ld_preload) {
-		ld_preload = with_libpseudo(ld_preload, libdir_path);
+		ld_preload = with_libpseudo(ld_preload);
 		if (!ld_preload) {
 			pseudo_error("can't allocate new %s variable.\n", PRELINK_LIBRARIES);
 		} else {
@@ -1145,7 +1128,7 @@ pseudo_setupenv() {
 		    free(ld_preload);
 		}
 	} else {
-		ld_preload = with_libpseudo("", libdir_path);
+		ld_preload = with_libpseudo("");
 		if (!ld_preload) {
 			pseudo_error("can't allocate new %s variable.\n", PRELINK_LIBRARIES);
 		} else {
@@ -1158,14 +1141,6 @@ pseudo_setupenv() {
 	 * need it
 	 */
 	free(libdir_path);
-
-
-#if PSEUDO_PORT_DARWIN
-	char *force_flat = GETENV("DYLD_FORCE_FLAT_NAMESPACE");
-	if (!force_flat) {
-		SETENV("DYLD_FORCE_FLAT_NAMESPACE", "1", 1);
-	}
-#endif
 }
 
 /* add pseudo stuff to the environment.
@@ -1248,13 +1223,13 @@ pseudo_setupenvp(char * const *envp) {
 	}
 
 	if (ld_preload) {
-		ld_preload = with_libpseudo(ld_preload, libdir_path);
+		ld_preload = with_libpseudo(ld_preload);
 		if (!ld_preload) {
 			pseudo_error("can't allocate new %s variable.\n", PRELINK_LIBRARIES);
 		} else
 			new_envp[j++] = ld_preload;
 	} else {
-		ld_preload = with_libpseudo("", libdir_path);
+		ld_preload = with_libpseudo("");
 		if (!ld_preload) {
 			pseudo_error("can't allocate new %s variable.\n", PRELINK_LIBRARIES);
 		} else {
@@ -1492,9 +1467,6 @@ pseudo_get_libdir(void) {
 			s = pseudo_libdir;
 		}
 	}
-#if PSEUDO_PORT_DARWIN
-	/* on Darwin, we need lib64, because dyld won't search */
-#else
 	/* If we somehow got lib64 in there, clean it down to just lib... */
 	if (s) {
 		size_t len = strlen(s);
@@ -1503,7 +1475,6 @@ pseudo_get_libdir(void) {
 			pseudo_set_value("PSEUDO_LIBDIR", s);
 		}
 	}
-#endif
 
 	return s;
 }
@@ -1622,23 +1593,6 @@ pseudo_access_fopen(const char *mode) {
  * - /etc/<file>
  */
 
-#if PSEUDO_PORT_DARWIN
-/* on Darwin, you can't just use /etc/passwd for system lookups,
- * you have to use the real library calls because they know about
- * Directory Services.  So...
- *
- * We make up fake fds and FILE * objects that can't possibly be
- * valid.
- */
-int pseudo_host_etc_passwd_fd = -3;
-int pseudo_host_etc_group_fd = -4;
-static FILE pseudo_fake_passwd_file;
-static FILE pseudo_fake_group_file;
-FILE *pseudo_host_etc_passwd_file = &pseudo_fake_passwd_file;
-FILE *pseudo_host_etc_group_file = &pseudo_fake_group_file;
-
-#endif
-
 int
 pseudo_etc_file(const char *file, char *realname, int flags, const char **search_dirs, int dircount) {
 	char filename[pseudo_path_max()];
@@ -1666,20 +1620,6 @@ pseudo_etc_file(const char *file, char *realname, int flags, const char **search
 		 */
 		if (!s)
 			break;
-#if PSEUDO_PORT_DARWIN
-		/* special magic: empty string implies our emulation
-		 * of the passwd/group files.
-		 */
-		if (!*s) {
-			if (!strcmp("passwd", file)) {
-				pseudo_debug(PDBGF_CHROOT, "Darwin hackery: pseudo_etc_passwd returning magic passwd fd\n");
-				return pseudo_host_etc_passwd_fd;
-			} else if (!strcmp("group", file)) {
-				pseudo_debug(PDBGF_CHROOT, "Darwin hackery: pseudo_etc_passwd returning magic group fd\n");
-				return pseudo_host_etc_group_fd;
-			}
-		}
-#endif
 		snprintf(filename, pseudo_path_max(), "%s/etc/%s",
 			s, file);
 		rc = open(filename, flags, 0600);

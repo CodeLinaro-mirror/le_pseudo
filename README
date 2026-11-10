@@ -41,8 +41,9 @@ names (such as libpseudo<suffix>.so).  This was used in the WR environment
 to create libpseudo-<host_libc_md5sum>.so, to ensure that libpseudo was
 rebuilt if the host libc changed.
 
-This code is not particularly portable, but works on Linux and also
-on 64-bit Intel Darwin systems.
+This code is not particularly portable, and only works on Linux.  macOS
+is not supported; to use pseudo on macOS, run it in a Linux virtual
+machine.
 
 Limited user documentation is provided in the given man page files (these
 are not currently installed, merely provided in the source directory), and

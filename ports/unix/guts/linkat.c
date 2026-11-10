@@ -18,9 +18,8 @@
 	 * symlinks; otherwise, linkat() will *not* follow symlinks. FreeBSD
 	 * appears to use the same semantics.
 	 *
-	 * So on Darwin, always pass AT_SYMLINK_FOLLOW, because the
-	 * alternative doesn't work. And never pass AT_SYMLINK_NOFOLLOW
-	 * because that's not a valid flag to linkat().
+	 * Never pass AT_SYMLINK_NOFOLLOW, because that's not a valid flag
+	 * to linkat().
 	 *
 	 * So we need a flag for path resolution which is AT_SYMLINK_NOFOLLOW
 	 * unless AT_SYMLINK_FOLLOW was specified, in which case it's 0.

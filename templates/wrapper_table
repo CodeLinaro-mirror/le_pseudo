@@ -14,7 +14,7 @@ typedef struct {
 static pseudo_function pseudo_functions[] = {
 @body
 	{ /* ${comment}; */
-		"${name}${maybe_inode64}",
+		"${name}",
 		(void (**)(void)) &real_${name},
 		(void (*)(void)) wrap_${name},
 		${version}

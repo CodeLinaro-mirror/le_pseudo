@@ -163,7 +163,7 @@ extern char *pseudo_version;
  * would ever do that? Well, Linux did, and possibly as a result, linkat()
  * does by default too; if you are on a host with the historical Unix
  * behavior of following symlinks to find the link target, you will want
- * to set this to AT_SYMLINK_FOLLOW. Darwin does.
+ * to set this to AT_SYMLINK_FOLLOW.
  */
 #define PSEUDO_LINK_SYMLINK_BEHAVIOR 0
 

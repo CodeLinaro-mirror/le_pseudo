@@ -308,10 +308,6 @@ pseudo_server_start(int daemonize) {
 		pseudo_debug(PDBGF_SERVER, "Acquired lock.\n");
 	}
 
-#if PSEUDO_PORT_DARWIN
-	sun.sun_len = strlen(PSEUDO_SOCKET) + 1;
-#endif
-
 	listen_fd = socket(PF_UNIX, SOCK_STREAM, 0);
 	if (listen_fd < 0) {
 		pseudo_error("couldn't create listening socket: %s\n", strerror(errno));

@@ -234,9 +234,6 @@ class Function:
         self.port = port
         self.directory = ''
         self.version = 'NULL'
-        # On Darwin, some functions are SECRETLY converted to foo$INODE64
-        # when called.  So we have to look those up for real_*
-        self.inode64 = None
         self.real_func = None
         self.paths_to_munge = []
         self.specific_dirfds = {}
@@ -328,12 +325,6 @@ class Function:
                     key = key.replace(arch, "")
                 setattr(self, key, value)
     
-    def maybe_inode64(self):
-        if self.inode64 and os.uname()[0] == 'Darwin':
-            return "$INODE64"
-        else:
-            return ""
-
     def end_maybe_skip(self):
         if self.hand_wrapped:
             return """/* Hand-written wrapper for this function. */
