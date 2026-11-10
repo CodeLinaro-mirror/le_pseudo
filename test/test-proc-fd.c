@@ -299,6 +299,72 @@ main(int argc, char **argv)
 	snprintf(path, sizeof path, "%s/file3", dir);
 	expect_ctx("context did not land on the target via own pid", path, NULL);
 
+	/* 6. /proc/self/fd/<n>/<name> resolves below the directory the
+	 *    descriptor refers to, even after a parent of that directory was
+	 *    renamed and its old name reused.  pseudo only updates recorded
+	 *    descriptor paths that match a renamed path exactly, so this
+	 *    leaves the record for the descriptor stale.
+	 */
+	{
+		char sub[512];
+
+		snprintf(path, sizeof path, "%s/p1", dir);
+		if (mkdir(path, 0755) == -1) {
+			perror(path);
+			return 1;
+		}
+		snprintf(path, sizeof path, "%s/p1/d", dir);
+		if (mkdir(path, 0755) == -1) {
+			perror(path);
+			return 1;
+		}
+		snprintf(path, sizeof path, "%s/p1/d/f", dir);
+		if (close(open(path, O_CREAT | O_WRONLY, 0644)) == -1) {
+			perror(path);
+			return 1;
+		}
+		snprintf(path, sizeof path, "%s/p1/d", dir);
+		fd = open(path, O_RDONLY | O_DIRECTORY);
+		if (fd == -1) {
+			perror(path);
+			return 1;
+		}
+		snprintf(path, sizeof path, "%s/p1", dir);
+		snprintf(sub, sizeof sub, "%s/p2", dir);
+		if (rename(path, sub) == -1) {
+			perror("rename");
+			return 1;
+		}
+		if (mkdir(path, 0755) == -1) {
+			perror(path);
+			return 1;
+		}
+		snprintf(path, sizeof path, "%s/p1/d", dir);
+		if (mkdir(path, 0755) == -1) {
+			perror(path);
+			return 1;
+		}
+		snprintf(path, sizeof path, "%s/p1/d/f", dir);
+		if (close(open(path, O_CREAT | O_WRONLY, 0644)) == -1) {
+			perror(path);
+			return 1;
+		}
+
+		snprintf(sub, sizeof sub, "/proc/self/fd/%d/f", fd);
+		if (setxattr(sub, CTX, "onrenamed", strlen("onrenamed") + 1, 0) == -1) {
+			fail("context set below a renamed directory descriptor",
+			     strerror(errno));
+		} else {
+			pass("context set below a renamed directory descriptor");
+		}
+		close(fd);
+
+		snprintf(path, sizeof path, "%s/p2/d/f", dir);
+		expect_ctx("context landed in the renamed directory", path, "onrenamed");
+		snprintf(path, sizeof path, "%s/p1/d/f", dir);
+		expect_ctx("context did not land in the reused name", path, NULL);
+	}
+
 	printf("%s: %d check(s) failed\n", failures ? "FAIL" : "OK", failures);
 	return failures ? 1 : 0;
 }
