@@ -147,9 +147,9 @@ ignore mismatch errors in pseudo's log.
 
 6. THE SERVER TRUSTS ITS CLIENTS
 
-The pseudo server listens on a Unix socket in its local state directory
+The pseudo server listens on Unix sockets in its local state directory
 and does not authenticate clients beyond the filesystem permissions of
-that socket.  Any process running as the build user can connect and
+those sockets.  Any process running as the build user can connect and
 change the database, and the database files themselves are writable by
 that user.  The resulting metadata can only be trusted as much as every
 process running as the build user.

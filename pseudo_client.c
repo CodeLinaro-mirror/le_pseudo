@@ -46,6 +46,13 @@ static char *program_invocation_name = "unknown";
 static char *base_path(int dirfd, const char *path, int leave_last);
 
 static int connect_fd = -1;
+/* Requests go to the server over a datagram socket shared by all
+ * clients, so the server handles them in the order they were sent even
+ * across processes; replies come back on connect_fd.  See pseudo_server.c.
+ */
+static int request_fd = -1;
+static int client_id = 0;
+static unsigned int client_serial = 0;
 static int server_pid = 0;
 int pseudo_localstate_dir_fd = -1;
 static int pseudo_pathlock_fd = -1;
@@ -429,6 +436,18 @@ pseudo_profile_report(void) {
 }
 #endif
 
+static void
+client_disconnect(void) {
+	if (connect_fd != -1) {
+		close(connect_fd);
+		connect_fd = -1;
+	}
+	if (request_fd != -1) {
+		close(request_fd);
+		request_fd = -1;
+	}
+}
+
 void
 pseudo_init_client(void) {
 	char *env;
@@ -436,10 +455,7 @@ pseudo_init_client(void) {
 
 	pseudo_antimagic();
 	pseudo_new_pid();
-	if (connect_fd != -1) {
-		close(connect_fd);
-		connect_fd = -1;
-	}
+	client_disconnect();
 #ifdef PSEUDO_PROFILING
 	if (pseudo_profile_fd > -1) {
 		close(pseudo_profile_fd);
@@ -1136,6 +1152,8 @@ client_ping(void) {
 		server_pid = 0;
 		return 1;
 	} else {
+		client_id = ack->client_id;
+		client_serial = ack->client_serial;
                 /* The server tells us whether or not to log things. */
                 if (ack->result == RESULT_SUCCEED) {
                         pseudo_client_logging = 1;
@@ -1280,6 +1298,7 @@ static int
 client_connect(void) {
 	/* we have a server pid, is it responsive? */
 	struct sockaddr_un sun = { .sun_family = AF_UNIX };
+	struct sockaddr_un req_sun = { .sun_family = AF_UNIX };
 	struct stat st;
 	int cwd_fd = -1;
 	int use_chdir;
@@ -1295,13 +1314,19 @@ client_connect(void) {
 	len = snprintf(sun.sun_path, sizeof(sun.sun_path), "/proc/self/fd/%d",
 		pseudo_localstate_dir_fd);
 	if (len > 0 && (size_t) len + 1 + strlen(PSEUDO_SOCKET) < sizeof(sun.sun_path) &&
+	    (size_t) len + 1 + strlen(PSEUDO_REQUEST_SOCKET) < sizeof(req_sun.sun_path) &&
 	    stat(sun.sun_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+		memcpy(req_sun.sun_path, sun.sun_path, len);
+		snprintf(req_sun.sun_path + len, sizeof(req_sun.sun_path) - len, "/%s",
+			PSEUDO_REQUEST_SOCKET);
 		snprintf(sun.sun_path + len, sizeof(sun.sun_path) - len, "/%s",
 			PSEUDO_SOCKET);
 		use_chdir = 0;
 	} else {
 		pseudo_debug(PDBGF_CLIENT, "/proc/self/fd unusable or path too long, changing directory to connect.\n");
 		snprintf(sun.sun_path, sizeof(sun.sun_path), "%s", PSEUDO_SOCKET);
+		snprintf(req_sun.sun_path, sizeof(req_sun.sun_path), "%s",
+			PSEUDO_REQUEST_SOCKET);
 		use_chdir = 1;
 	}
 
@@ -1349,6 +1374,23 @@ client_connect(void) {
 		connect_fd = -1;
 		return 1;
 	}
+	request_fd = pseudo_fd(socket(PF_UNIX, SOCK_DGRAM, 0), MOVE_FD);
+	if (request_fd == -1 ||
+	    connect(request_fd, (struct sockaddr *) &req_sun, sizeof(req_sun)) == -1) {
+		char *e = strerror(errno);
+		pseudo_debug(PDBGF_CLIENT, "Can't connect request socket to %s: (%s)\n",
+			req_sun.sun_path, e);
+		pseudo_evlog(PDBGF_CLIENT, "request socket connect failed: %s\n", e);
+		client_disconnect();
+		if (use_chdir) {
+			if (fchdir(cwd_fd) == -1) {
+				pseudo_error("return to previous directory failed: %s\n",
+					strerror(errno));
+			}
+			close(cwd_fd);
+		}
+		return 1;
+	}
 	if (use_chdir) {
 		if (fchdir(cwd_fd) == -1) {
 			pseudo_error("return to previous directory failed: %s\n",
@@ -1368,10 +1410,7 @@ pseudo_client_setup(void) {
 	server_pid = 0;
 
 	/* avoid descriptor leak, I hope */
-	if (connect_fd >= 0) {
-		close(connect_fd);
-		connect_fd = -1;
-	}
+	client_disconnect();
 	if (client_connect() == 0) {
 		pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "connection started.\n");
 		if (client_ping() == 0) {
@@ -1382,8 +1421,7 @@ pseudo_client_setup(void) {
 			/* and now we'll close the connection, and try to
 			 * kick the server.
 			 */
-			close(connect_fd);
-			connect_fd = -1;
+			client_disconnect();
 		}
 	}
 	pseudo_debug(PDBGF_CLIENT, "connection failed, checking server...\n");
@@ -1436,8 +1474,7 @@ pseudo_client_setup(void) {
 			} else {
 				pseudo_debug(PDBGF_CLIENT, "ping failed to restarted server.\n");
 				pseudo_evlog(PDBGF_CLIENT, "ping failed to restarted server.\n");
-				close(connect_fd);
-				connect_fd = -1;
+				client_disconnect();
 				return 1;
 			}
 		} else {
@@ -1449,11 +1486,57 @@ pseudo_client_setup(void) {
 }
 
 #define PSEUDO_RETRIES 250
+
+static void
+pseudo_client_abort(void) {
+	char *local_state_dir = pseudo_get_value("PSEUDO_LOCALSTATEDIR");
+	pseudo_info("abort()ing pseudo client by server request. See https://wiki.yoctoproject.org/wiki/Pseudo_Abort for more details on this.\n"
+		"Check logfile: %s/%s\n", local_state_dir, PSEUDO_LOGFILE);
+	abort();
+}
+
+/* Send a request over the request socket, reconnecting to (or starting)
+ * the server if that fails.  Returns 0 once sent.
+ */
+static int
+pseudo_client_send(pseudo_msg_t *msg, size_t len, const char *path, int tries) {
+	int rc;
+
+	for (; tries < PSEUDO_RETRIES; ++tries) {
+		pseudo_evlog(PDBGF_CLIENT, "try %d, request fd is %d\n", tries, request_fd);
+		msg->client_id = client_id;
+		msg->client_serial = client_serial;
+		rc = pseudo_msg_send(request_fd, msg, len, path);
+		if (rc == 0)
+			return tries;
+		pseudo_evlog(PDBGF_CLIENT, "msg_send failed [%d].\n", rc);
+		pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "msg_send: %d%s\n",
+			rc,
+			rc == -1 ? " (sigpipe)" :
+				   " (short write)");
+		pseudo_debug(PDBGF_CLIENT, "trying to get server, try %d\n", tries);
+		/* try to open server; if we fail, wait a bit before
+		 * retry.
+		 */
+		if (pseudo_client_setup()) {
+			int ms = (getpid() % 5) + (3 * tries);
+			struct timespec delay = { .tv_sec = 0, .tv_nsec = ms * 1000000 };
+			pseudo_evlog(PDBGF_CLIENT, "setup failed, delaying %d ms.\n", ms);
+			nanosleep(&delay, NULL);
+		} else {
+			pseudo_evlog(PDBGF_CLIENT, "setup apparently successful, retrying message immediately.\n");
+		}
+	}
+	pseudo_error("pseudo: server connection persistently failed, aborting.\n");
+	pseudo_evlog_dump();
+	pseudo_critical("event log dumped, aborting.\n");
+	return -1;
+}
+
 static pseudo_msg_t *
 pseudo_client_request(pseudo_msg_t *msg, size_t len, const char *path) {
 	pseudo_msg_t *response = 0;
 	int tries = 0;
-	int rc;
 
 	if (!msg)
 		return 0;
@@ -1465,36 +1548,16 @@ pseudo_client_request(pseudo_msg_t *msg, size_t len, const char *path) {
 	 */
 	pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "sending a message: ino %llu\n",
 		(unsigned long long) msg->ino);
-        for (tries = 0; tries < PSEUDO_RETRIES; ++tries) {
-		pseudo_evlog(PDBGF_CLIENT, "try %d, connect fd is %d\n", tries, connect_fd);
-		rc = pseudo_msg_send(connect_fd, msg, len, path);
-		if (rc != 0) {
-			pseudo_evlog(PDBGF_CLIENT, "msg_send failed [%d].\n", rc);
-			pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "msg_send: %d%s\n",
-				rc,
-				rc == -1 ? " (sigpipe)" :
-					   " (short write)");
-			pseudo_debug(PDBGF_CLIENT, "trying to get server, try %d\n", tries);
-			/* try to open server; if we fail, wait a bit before
-			 * retry.
-			 */
-			if (pseudo_client_setup()) {
-				int ms = (getpid() % 5) + (3 * tries);
-				struct timespec delay = { .tv_sec = 0, .tv_nsec = ms * 1000000 };
-				pseudo_evlog(PDBGF_CLIENT, "setup failed, delaying %d ms.\n", ms);
-				nanosleep(&delay, NULL);
-			} else {
-				pseudo_evlog(PDBGF_CLIENT, "setup apparently successful, retrying message immediately.\n");
-			}
-			continue;
-		}
-		/* note "continue" above; we only get here if rc was 0,
-		 * indicating a successful send.
-		 */
+	for (; tries < PSEUDO_RETRIES; ++tries) {
+		tries = pseudo_client_send(msg, len, path, tries);
 		pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "sent!\n");
 		response = pseudo_msg_receive(connect_fd);
 		if (!response) {
 			pseudo_debug(PDBGF_CLIENT, "expected response did not occur; retrying\n");
+			/* the connection may be gone even though the request
+			 * socket still works, so reconnect before resending
+			 */
+			pseudo_client_setup();
 		} else {
 			if (response->type != PSEUDO_MSG_ACK) {
 				pseudo_debug(PDBGF_CLIENT, "got non-ack response %d\n", response->type);
@@ -2179,6 +2242,8 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 			startfd = pseudo_grp_fd + 1;
 		if (connect_fd >= startfd)
 			startfd = connect_fd + 1;
+		if (request_fd >= startfd)
+			startfd = request_fd + 1;
 		/* the fds below startfd are the ones our own are mixed in
 		 * with, so close those by hand and skip the ones we need
 		 */
@@ -2187,7 +2252,7 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 					i == pseudo_localstate_dir_fd || i == pseudo_pathlock_fd ||
 					i == pseudo_pwd_fd ||
 					i == pseudo_pwd_lck_fd || i == pseudo_grp_fd ||
-					i == connect_fd)
+					i == connect_fd || i == request_fd)
 				continue;
 			pseudo_client_close(i);
 			close(i);
@@ -2206,6 +2271,11 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 				connect_fd = pseudo_fd(connect_fd, COPY_FD);
 				if (connect_fd == -1) {
 					pseudo_error("tried to close connection, couldn't dup: %s\n", strerror(errno));
+				}
+			} else if (fd == request_fd) {
+				request_fd = pseudo_fd(request_fd, COPY_FD);
+				if (request_fd == -1) {
+					pseudo_error("tried to close request socket, couldn't dup: %s\n", strerror(errno));
 				}
 			} else if (fd == pseudo_util_debug_fd || fd == pseudo_util_evlog_fd) {
 				/* both are stderr by default */
@@ -2312,12 +2382,8 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 #endif
 		if (result) {
 			pseudo_debug(PDBGF_OP, "(%d) %s", getpid(), pseudo_res_name(result->result));
-			if (result->result == RESULT_ABORT) {
-				char *local_state_dir = pseudo_get_value("PSEUDO_LOCALSTATEDIR");
-				pseudo_info("abort()ing pseudo client by server request. See https://wiki.yoctoproject.org/wiki/Pseudo_Abort for more details on this.\n"
-					"Check logfile: %s/%s\n", local_state_dir, PSEUDO_LOGFILE);
-				abort();
-			}
+			if (result->result == RESULT_ABORT)
+				pseudo_client_abort();
 			if (op == OP_STAT || op == OP_FSTAT) {
 				pseudo_debug(PDBGF_OP, " mode 0%o uid %d:%d",
 					(int) result->mode,

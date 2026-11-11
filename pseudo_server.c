@@ -41,6 +41,7 @@ typedef struct {
 	pid_t pid;
 	char *tag;
 	char *program;
+	unsigned int serial;
 } pseudo_client_t;
 
 pseudo_client_t *clients;
@@ -50,6 +51,19 @@ pseudo_client_t *clients;
  * max_clients: Size of table.
  */
 static int active_clients = 0, highest_client = 0, max_clients = 0;
+
+/* Clients send all requests over one datagram socket, so the server
+ * handles them in the order they were sent, even across clients: once
+ * one client's send returns, its request is queued ahead of anything
+ * another client sends afterwards.  Replies go back over each client's
+ * stream connection, which also carries the initial ping, shutdown
+ * requests, and tells us when the client goes away.  Each connection
+ * gets a serial number so a request from a client that has since gone
+ * away is never answered on a reused client slot.
+ */
+static int request_fd = -1;
+static unsigned int next_serial = 0;
+#define REQUEST_EVENT ((uint64_t) -1)
 
 #define LOOP_DELAY 2
 #define DEFAULT_PSEUDO_SERVER_TIMEOUT 30
@@ -411,6 +425,34 @@ pseudo_server_start(int daemonize) {
 		pseudo_error("couldn't listen on socket: %s\n", strerror(errno));
 		exit(PSEUDO_EXIT_SOCKET_LISTEN);
 	}
+
+	request_fd = socket(PF_UNIX, SOCK_DGRAM, 0);
+	if (request_fd < 0) {
+		pseudo_error("couldn't create request socket: %s\n", strerror(errno));
+		exit(PSEUDO_EXIT_SOCKET_CREATE);
+	}
+	if (request_fd <= 2) {
+		newfd = fcntl(request_fd, F_DUPFD, 3);
+		if (newfd < 0) {
+			pseudo_error("couldn't dup request socket: %s\n", strerror(errno));
+			exit(PSEUDO_EXIT_SOCKET_FD);
+		}
+		close(request_fd);
+		request_fd = newfd;
+	}
+	rc = unlink(PSEUDO_REQUEST_SOCKET);
+	if (rc == -1 && errno != ENOENT) {
+		pseudo_error("Can't unlink existing request socket: %s.\n",
+			strerror(errno));
+		exit(PSEUDO_EXIT_SOCKET_UNLINK);
+	}
+	{
+		struct sockaddr_un req_sun = { .sun_family = AF_UNIX, .sun_path = PSEUDO_REQUEST_SOCKET };
+		if (bind(request_fd, (struct sockaddr *) &req_sun, sizeof(req_sun)) == -1) {
+			pseudo_error("couldn't bind request socket: %s\n", strerror(errno));
+			exit(PSEUDO_EXIT_SOCKET_BIND);
+		}
+	}
 	rc = pseudo_server_write_pid(getpid());
 	if (rc != 0) {
 		pseudo_warning("couldn't write pid file.\n");
@@ -449,6 +491,7 @@ open_client(int fd) {
 			clients[i].pid = 0;
 			clients[i].tag = NULL;
 			clients[i].program = NULL;
+			clients[i].serial = ++next_serial;
 			++active_clients;
 			if (i > highest_client)
 				highest_client = i;
@@ -472,6 +515,7 @@ open_client(int fd) {
 		clients[max_clients].pid = 0;
 		clients[max_clients].tag = NULL;
 		clients[max_clients].program = NULL;
+		clients[max_clients].serial = ++next_serial;
 		highest_client = max_clients;
 
 		max_clients += 16;
@@ -555,6 +599,11 @@ serve_client(int i) {
 				}
 			}
 			pseudo_debug(PDBGF_SERVER, "\n");
+		}
+		/* tell the client which slot to name in its requests */
+		if (in->type == PSEUDO_MSG_PING) {
+			in->client_id = i;
+			in->client_serial = clients[i].serial;
 		}
 		if (in->type == PSEUDO_MSG_SHUTDOWN && !clients[i].pid) {
 			pseudo_debug(PDBGF_SERVER, "shutdown request from client %d [pid %d]\n",
@@ -670,6 +719,93 @@ serve_client(int i) {
 	return rc;
 }
 
+/* Handle one request from the datagram socket, replying on the client's
+ * stream connection.
+ */
+static void
+serve_request(pseudo_msg_t *in) {
+	struct timeval tv1, tv2;
+	char *response_path = 0;
+	size_t response_pathlen = -1;
+	int id = in->client_id;
+	int valid, rc;
+
+	gettimeofday(&tv1, NULL);
+	++messages;
+	valid = id > 0 && id <= highest_client && clients[id].fd != -1 &&
+		clients[id].serial == in->client_serial;
+	if (!valid) {
+		pseudo_debug(PDBGF_SERVER, "request from departed client %d [pid %d]\n",
+			id, in->client);
+	} else if (in->client != clients[id].pid) {
+		pseudo_debug(PDBGF_SERVER, "uh-oh, expected pid %d for client %d, got %d\n",
+			(int) clients[id].pid, id, in->client);
+	}
+	switch (in->type) {
+	case PSEUDO_MSG_PING:
+		in->type = PSEUDO_MSG_ACK;
+		break;
+	case PSEUDO_MSG_OP:
+	case PSEUDO_MSG_FASTOP:
+		if (pseudo_server_response(in, valid ? clients[id].program : NULL,
+				valid ? clients[id].tag : NULL,
+				&response_path, &response_pathlen)) {
+			in->type = PSEUDO_MSG_NAK;
+		} else {
+			in->type = PSEUDO_MSG_ACK;
+		}
+		break;
+	default:
+		pdb_log_msg(SEVERITY_WARN, in, NULL, NULL, "invalid request type %d", in->type);
+		in->type = PSEUDO_MSG_NAK;
+		break;
+	}
+	if (valid) {
+		pseudo_debug(PDBGF_SERVER | PDBGF_VERBOSE, "response: %d (%s)\n",
+			in->result, pseudo_res_name(in->result));
+		in->client = id;
+		in->pathlen = response_path ? response_pathlen : 0;
+		rc = pseudo_msg_send(clients[id].fd, in, in->pathlen, response_path);
+		if (rc != 0) {
+			pseudo_debug(PDBGF_SERVER, "failed to send response to client %d [%d]: %d (%s)\n",
+				id, (int) clients[id].pid, rc, strerror(errno));
+		} else {
+			++responses;
+		}
+	}
+	free(response_path);
+
+	gettimeofday(&tv2, NULL);
+	message_time.tv_sec += (tv2.tv_sec - tv1.tv_sec);
+	message_time.tv_usec += (tv2.tv_usec - tv1.tv_usec);
+	if (message_time.tv_usec < 0) {
+		message_time.tv_usec += 1000000;
+		--message_time.tv_sec;
+	} else while (message_time.tv_usec > 1000000) {
+		message_time.tv_usec -= 1000000;
+		++message_time.tv_sec;
+	}
+}
+
+/* Handle up to max queued requests, returning how many were handled. */
+static int
+serve_requests(int max) {
+	pseudo_msg_t *in;
+	int n;
+
+	for (n = 0; n < max; ++n) {
+		in = pseudo_msg_receive_request(request_fd);
+		if (!in) {
+			/* a malformed datagram was discarded; keep going */
+			if (errno == EBADMSG)
+				continue;
+			break;
+		}
+		serve_request(in);
+	}
+	return n;
+}
+
 /* get clients, handle messages, shut down.
  * This doesn't actually do any work, it just calls a ton of things which
  * do work.
@@ -730,6 +866,12 @@ pseudo_server_loop(void) {
 		pseudo_error("epoll_ctl() failed with listening socket.\n");
 		exit(PSEUDO_EXIT_EPOLL_CTL);
 	}
+	ev.events = EPOLLIN;
+	ev.data.u64 = REQUEST_EVENT;
+	if (epoll_ctl(epollfd, EPOLL_CTL_ADD, request_fd, &ev) == -1) {
+		pseudo_error("epoll_ctl() failed with request socket.\n");
+		exit(PSEUDO_EXIT_EPOLL_CTL);
+	}
 
 	pdb_log_msg(SEVERITY_INFO, NULL, NULL, NULL, "server started (pid %d)", getpid());
 
@@ -758,7 +900,14 @@ pseudo_server_loop(void) {
 		} else if (rc > 0) {
 			loop_timeout = pseudo_server_timeout;
 			for (i = 0; i < rc; ++i) {
-				int client_id = events[i].data.u64;
+				int client_id;
+				if (events[i].data.u64 == REQUEST_EVENT) {
+					serve_requests(64);
+					if (die_forcefully)
+						break;
+					continue;
+				}
+				client_id = events[i].data.u64;
 				if (clients[client_id].fd == listen_fd) {
 					if (!die_forcefully) {
 						len = sizeof(client);
@@ -845,6 +994,9 @@ pseudo_server_loop(void) {
 			pseudo_info("done.\n");
 		}
 		if (die_peacefully || die_forcefully) {
+			/* apply requests clients sent before they went away */
+			while (serve_requests(64) == 64)
+				;
 			pseudo_debug(PDBGF_SERVER, "quitting.\n");
 			pseudo_debug(PDBGF_SERVER | PDBGF_BENCHMARK, "server %d exiting: handled %d messages in %.4f seconds\n",
 				getpid(), messages,

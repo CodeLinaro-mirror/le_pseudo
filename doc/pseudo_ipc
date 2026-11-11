@@ -1,5 +1,28 @@
 MESSAGE PASSING
 
+The server has two UNIX domain sockets in its local state directory:
+
+pseudo.socket
+	A stream socket.  Each client connects to it, sends a PING to
+	register, and gets every reply on this connection.  pseudo -S
+	also sends its SHUTDOWN request here, and the server notices a
+	client going away when the connection closes.
+
+pseudo.request
+	A datagram socket shared by all clients.  Every request after the
+	initial PING is sent here.
+
+The kernel queues datagrams from all senders on the one socket in the
+order they were sent, so the server handles requests in that order even
+across processes.  Once a client's send has returned, its request is
+queued ahead of anything another client sends afterwards.  If a process
+changes a file and then tells another process about it (through a pipe,
+by exiting, or any other way), the server has already queued the change
+by the time the second process can ask about the file.
+
+It also means the server reads each request with a single recv(),
+rather than a header and then a path.
+
 typedef struct {
 	pseudo_msg_type_t type;
 	pseudo_op_t op;
@@ -16,6 +39,8 @@ typedef struct {
 	unsigned int pathlen;
 	int nlink;
 	int deleting;
+	int client_id;
+	unsigned int client_serial;
 	char path[];
 } pseudo_msg_t;
 
@@ -43,6 +68,11 @@ type is one of PING, OP, FASTOP, SHUTDOWN, ACK, or NAK.  The client
 only sends PING, OP, or FASTOP.  FASTOP is used for operations whose result
 the client doesn't need, but the server still replies with ACK (or NAK on
 failure) and the client still waits for that reply.
+
+A PING on the stream socket registers the client: the reply gives it the
+client_id and client_serial to put in its requests.  A PING on the
+request socket is answered once every request the client sent before it
+has been handled.
 
 When run with '-S', the pseudo program
 runs as a client, sending a SHUTDOWN message to a server -- but only if
@@ -83,6 +113,12 @@ paths against inodes.
 deleting carries the database's "deleting" mark (see doc/database) when
 the server looks up file entries.  The server uses it internally; the
 client doesn't set or use it.
+
+client_id and client_serial identify the client's stream connection in
+requests on the shared socket, so the server knows where to reply.  The
+server numbers every connection, so a request still queued from a client
+that has gone away is never answered on a connection that has since
+reused its client_id; the server applies it without replying.
 
 32/64 bit:  This structure should have the same offsets for every element,
 including path, on both 64-bit and 32-bit machines.  (Check with 'offsets.c'.)

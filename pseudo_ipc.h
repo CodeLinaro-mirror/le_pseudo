@@ -26,6 +26,8 @@ typedef struct {
 	unsigned int pathlen;
 	int nlink;
 	int deleting;
+	int client_id;
+	unsigned int client_serial;
 	char path[];
 } pseudo_msg_t;
 
@@ -47,7 +49,13 @@ extern int pseudo_access_fopen(const char *);
 
 #define PSEUDO_HEADER_SIZE (offsetof(pseudo_msg_t, path))
 
+/* largest request sent over the datagram socket: two paths for rename,
+ * or a path plus an xattr name and value (at most 64KB)
+ */
+#define PSEUDO_MAX_REQUEST (256 * 1024)
+
 extern pseudo_msg_t *pseudo_msg_receive(int fd);
+extern pseudo_msg_t *pseudo_msg_receive_request(int fd);
 extern pseudo_msg_t *pseudo_msg_dup(pseudo_msg_t *);
 extern pseudo_msg_t *pseudo_msg_dupheader(pseudo_msg_t *);
 extern pseudo_msg_t *pseudo_msg_new(size_t, const char *);

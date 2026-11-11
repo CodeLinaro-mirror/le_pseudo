@@ -131,6 +131,7 @@ extern char *pseudo_version;
 #define PSEUDO_PATHLOCK "pseudo.pathlock"
 #define PSEUDO_PIDFILE "pseudo.pid"
 #define PSEUDO_SOCKET "pseudo.socket"
+#define PSEUDO_REQUEST_SOCKET "pseudo.request"
 
 #define PSEUDO_SEVERITY_DEFAULT "info,warn,error"
 

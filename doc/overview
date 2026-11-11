@@ -19,7 +19,8 @@ to the virtual environment.
 
 Underlying this is access to a server process, which is automatically
 spawned by the library if one is not available.  The server process maintains
-a UNIX domain socket while it is active, and maintains a database (using
+UNIX domain sockets while it is active (see doc/pseudo_ipc), and maintains a
+database (using
 sqlite) of files known to the system.  Files are recorded in the database
 only if they are created within the virtualized environment or have been
 altered by it; files merely read are not added.

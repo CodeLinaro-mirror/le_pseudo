@@ -188,6 +188,48 @@ pseudo_msg_receive(int fd) {
 	return incoming;
 }
 
+/* receive one request from the server's datagram socket without
+ * blocking.  Returns NULL if none is queued (errno EAGAIN), or if the
+ * datagram was malformed and has been discarded (errno EBADMSG).
+ */
+pseudo_msg_t *
+pseudo_msg_receive_request(int fd) {
+	static pseudo_msg_t *incoming;
+	ssize_t r;
+
+	if (fd < 0)
+		return 0;
+	if (!incoming) {
+		/* one spare byte so the path can always be null-terminated */
+		incoming = malloc(PSEUDO_MAX_REQUEST + 1);
+		if (!incoming) {
+			pseudo_error("Couldn't allocate request buffer.\n");
+			return 0;
+		}
+	}
+	errno = 0;
+	r = recv(fd, incoming, PSEUDO_MAX_REQUEST, MSG_DONTWAIT | MSG_TRUNC);
+	if (r == -1) {
+		if (errno != EAGAIN && errno != EWOULDBLOCK)
+			pseudo_debug(PDBGF_IPC, "request recv failed: %s\n", strerror(errno));
+		return 0;
+	}
+	if (r > PSEUDO_MAX_REQUEST) {
+		pseudo_error("dropped oversized request (%ld bytes).\n", (long) r);
+		errno = EBADMSG;
+		return 0;
+	}
+	if (r < (ssize_t) PSEUDO_HEADER_SIZE ||
+	    (size_t) r != PSEUDO_HEADER_SIZE + incoming->pathlen) {
+		pseudo_error("dropped malformed request (%ld bytes).\n", (long) r);
+		errno = EBADMSG;
+		return 0;
+	}
+	pseudo_debug(PDBGF_IPC, "got request, type %d, pathlen %d\n", incoming->type, (int) incoming->pathlen);
+	((char *) incoming)[r] = '\0';
+	return incoming;
+}
+
 /* duplicate a message -- currently totally unused */
 pseudo_msg_t *
 pseudo_msg_dup(pseudo_msg_t *old) {
