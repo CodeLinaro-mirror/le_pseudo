@@ -10,3 +10,4 @@ int posix_spawnp(pid_t *pid, const char *file, const posix_spawn_file_actions_t 
 int execvpe(const char *file, char *const *argv, char *const *envp); /* hand_wrapped=1 */
 int fexecve(int fd, char *const *argv, char *const *envp); /* hand_wrapped=1 */
 int execveat(int dirfd, const char *path, char *const *argv, char *const *envp, int flags); /* hand_wrapped=1 */
+void _exit(int status); /* hand_wrapped=1 */

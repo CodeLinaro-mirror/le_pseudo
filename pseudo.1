@@ -880,6 +880,21 @@ suppresses informational messages or warnings; errors are always shown.
 The default is
 .IR info,warn,error .
 .TP 8
+.B PSEUDO_SYNC
+By default, requests whose result the client doesn't use, such as
+.IR chown(2)
+or
+.IR chmod(2) ,
+are sent to the server without waiting for it to handle them.  The
+server still handles every request in the order clients sent it, so
+other processes always see the change.  If the server asks the client
+to abort, for instance after a path mismatch, the client aborts at its
+next request that does wait for a reply, or before
+.IR exec(3)
+or exiting.  If this variable is set to a value other than 0, the
+client waits for every request, so it aborts in the call that caused
+the problem.  This is slower, but can help when debugging.
+.TP 8
 .BR PSEUDO_UIDS ,\  PSEUDO_GIDS
 These variables are used internally to pass information about the current
 emulated user and group identity from one process to another.
@@ -937,9 +952,11 @@ or debugged in that context.
 Filesystem performance is noticably worse under
 .I pseudo
 than it is otherwise.  This is probably because nearly every operation
-(other than reads and writes) involves at least one round-trip network
-communication with the server, and probably some kind of database
-activity.
+(other than reads and writes) involves a message to the server, and
+probably some kind of database activity.  Operations that ask about a
+file wait for the server's reply; ones that only report a change do not
+(see
+.BR PSEUDO_SYNC ).
 
 .SH SECURITY
 .I pseudo

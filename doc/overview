@@ -47,7 +47,8 @@ client can restart it.)
 4.  The server code.  This code is fairly simple; all it does is maintain
 the database of file information.  Operations consist either of a request
 for information (e.g., a stat(2) call) or notification of a change.  The
-server sends back failure or success notices.
+server sends back failure or success notices for requests for information;
+notifications of a change are sent without waiting for a reply.
 
 As a fairly typical example, the progress of a stat(2) call is:
 

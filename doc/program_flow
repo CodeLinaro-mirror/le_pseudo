@@ -14,6 +14,8 @@ libpseudo execution flow:
 			setup pseudo_functions
 			setup log files (PSEUDO_DEBUG_FILE, PSEUDO_EVLOG_FILE)
 		pseudo_client.c: pseudo_init_client()
+			wait for this process's asynchronous requests
+			setup PSEUDO_SYNC
 			setup PSEUDO_DISABLED
 			setup pseudo_localstate_dir_fd
 			setup PSEUDO_NOSYMLINKEXP
@@ -30,6 +32,7 @@ libpseudo execution flow:
 			pseudo_setupenv()
 			if PSEUDO_UNLOAD
 				pseudo_dropenv()
+			pseudo_client_flush()
 			real_exec*()
 
 	fork()
@@ -76,6 +79,14 @@ libpseudo execution flow:
 		pseudo_droplock
 		unmask signals (if they were blocked above)
 		return rc
+
+	# on exit #
+
+	pseudo_wrappers.c: (destructor) _libpseudo_fini(), or _exit()/_Exit()
+		pseudo_exit_flush()
+			if this process has asynchronous requests pending,
+			and the lock is free (or already ours)
+				pseudo_client_flush()
 
 pseudo execution flow:
 	pseudo.c: main()

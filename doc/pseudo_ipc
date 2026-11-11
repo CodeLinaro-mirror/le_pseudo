@@ -20,8 +20,10 @@ changes a file and then tells another process about it (through a pipe,
 by exiting, or any other way), the server has already queued the change
 by the time the second process can ask about the file.
 
-It also means the server reads each request with a single recv(),
-rather than a header and then a path.
+That is what allows requests that need no reply to be sent without
+waiting for the server (see ASYNC below).  It also means the server
+reads each request with a single recv(), rather than a header and then
+a path.
 
 typedef struct {
 	pseudo_msg_type_t type;
@@ -53,26 +55,41 @@ All messages contain every field up to, but not including, path.  If
 pathlen is not zero, an additional pathlen bytes containing path are
 provided; path is null-terminated.
 
-Every message from client should get a response from server.  The server
-usually sends no path back; the exceptions are replies to xattr requests
-(attribute values or name lists) and the list of client PIDs in a refused
-SHUTDOWN request, described below.  Note that
-all server responses will in general share a single message object,
+Every message from the client gets a response from the server, except
+ASYNC requests.  The server usually sends no path back; the exceptions
+are replies to xattr requests (attribute values or name lists) and the
+list of client PIDs in a refused SHUTDOWN request, described below.
+Note that all server responses will in general share a single message object,
 and future operations may cause that object to be reallocated; the same
 goes for messages received by the server.  Basically, pseudo_msg_receive
 is not thread-safe; this is part of (but not all of) the reason that there's
 mutex stuff in the wrappers.  (The other part is the "antimagic" being
 able to blow things up.)
 
-type is one of PING, OP, FASTOP, SHUTDOWN, ACK, or NAK.  The client
-only sends PING, OP, or FASTOP.  FASTOP is used for operations whose result
-the client doesn't need, but the server still replies with ACK (or NAK on
-failure) and the client still waits for that reply.
+type is one of PING, OP, SHUTDOWN, ACK, NAK, or ASYNC.  The client
+sends PING, OP and ASYNC, and the server replies to PING and OP with ACK
+(or NAK on failure); the client waits for that reply.
 
 A PING on the stream socket registers the client: the reply gives it the
 client_id and client_serial to put in its requests.  A PING on the
 request socket is answered once every request the client sent before it
-has been handled.
+has been handled; the client uses this to wait for its ASYNC requests.
+
+ASYNC is used instead of OP for operations whose result the client
+doesn't use: chmod, chown, creat, link, mkdir, rename, symlink, unlink,
+did-unlink, cancel-unlink and set-xattr, and open and exec when the
+server is logging.  These are marked in enums/op.in.  The client doesn't
+wait for them, and the server only replies if the client must abort
+(RESULT_ABORT, for instance after a path mismatch).  That reply has type
+ASYNC, and arrives on the stream connection ahead of the reply to the
+client's next OP or PING, which is where the client reads it and aborts.
+To make sure an abort isn't lost, a client that has sent ASYNC requests
+sends a PING on the request socket and waits for the reply before
+exec() and when it exits, including through _exit().  A client that is
+killed doesn't, but the server still applies its requests.
+
+Setting PSEUDO_SYNC in a client's environment to a value other than 0
+makes it send OP instead of ASYNC, waiting for every request.
 
 When run with '-S', the pseudo program
 runs as a client, sending a SHUTDOWN message to a server -- but only if
@@ -85,7 +102,7 @@ reduces the timeout to 3 seconds, so it shuts down shortly after the
 last client goes away rather than waiting for the full timeout period.)
 
 result is the result of a particular operation.  It applies only in replies
-to OP messages.
+to OP and ASYNC messages.
 
 client should be the client's PID on send, and the server's client number for
 that client on response.  (The response isn't checked, and this is just a

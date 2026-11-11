@@ -1087,7 +1087,7 @@ pseudo_server_response(pseudo_msg_t *msg, const char *program, const char *tag, 
 		return 0;
 		break;
 	case PSEUDO_MSG_OP:
-	case PSEUDO_MSG_FASTOP:
+	case PSEUDO_MSG_ASYNC:
 		return pseudo_op(msg, program, tag, response_path, response_len);
 		break;
 	case PSEUDO_MSG_ACK:		/* FALLTHROUGH */

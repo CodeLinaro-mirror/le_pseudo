@@ -33,6 +33,10 @@
 	/* if exec() fails, we may end up taking signals unexpectedly...
 	 * not much we can do about that.
 	 */
+	/* exec() skips destructors, so collect errors for requests
+	 * sent without waiting now
+	 */
+	pseudo_client_flush();
 	sigprocmask(SIG_SETMASK, &pseudo_saved_sigmask, NULL);
 	rc = real_execvp(file, argv);
 

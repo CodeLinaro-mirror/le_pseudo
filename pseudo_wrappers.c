@@ -57,8 +57,10 @@ static pthread_mutex_t pseudo_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t pseudo_mutex_holder;
 static int pseudo_mutex_recursion = 0;
 static int pseudo_getlock(void);
+static int pseudo_trylock(void);
 static void pseudo_droplock(void);
 static int pseudo_lock_held(void);
+static void pseudo_exit_flush(void);
 static size_t pseudo_dechroot(char *, size_t);
 static void pseudo_sigblock(sigset_t *);
 
@@ -73,6 +75,7 @@ static void pseudo_io_uring_init(void);
 
 /* Constructor only exists in libpseudo */
 static void _libpseudo_init(void) __attribute__ ((constructor));
+static void _libpseudo_fini(void) __attribute__ ((destructor));
 
 static int _libpseudo_initted = 0;
 
@@ -128,6 +131,32 @@ _libpseudo_init(void) {
 
 	pseudo_magic();
 	pseudo_droplock();
+}
+
+/* Requests that need no reply are sent without waiting, so wait at exit
+ * for the server to handle them: if one of them makes the server ask the
+ * client to abort, that happens before the process is gone.  Another
+ * thread may be blocked indefinitely inside a wrapper, holding the lock,
+ * so don't wait for the lock; that thread's next request will collect
+ * any abort if it gets one.
+ */
+static void
+pseudo_exit_flush(void) {
+	sigset_t saved;
+
+	if (!_libpseudo_initted || pseudo_disabled || !pseudo_client_flush_needed())
+		return;
+	pseudo_sigblock(&saved);
+	if (pseudo_trylock() == 0) {
+		pseudo_client_flush();
+		pseudo_droplock();
+	}
+	sigprocmask(SIG_SETMASK, &saved, NULL);
+}
+
+static void
+_libpseudo_fini(void) {
+	pseudo_exit_flush();
 }
 
 void
@@ -236,6 +265,20 @@ pseudo_getlock(void) {
 			return -1;
 		}
 	}
+}
+
+static int
+pseudo_trylock(void) {
+	if (pthread_equal(pseudo_mutex_holder, pthread_self())) {
+		++pseudo_mutex_recursion;
+		return 0;
+	}
+	if (pthread_mutex_trylock(&pseudo_mutex) == 0) {
+		pseudo_mutex_recursion = 1;
+		pseudo_mutex_holder = pthread_self();
+		return 0;
+	}
+	return -1;
 }
 
 static int

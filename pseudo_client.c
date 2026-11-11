@@ -53,6 +53,13 @@ static int connect_fd = -1;
 static int request_fd = -1;
 static int client_id = 0;
 static unsigned int client_serial = 0;
+/* requests that need no reply are sent without waiting.  async_pending
+ * is set while some may not have been handled yet, so their errors are
+ * collected before exec() or exit().
+ */
+static int async_pending = 0;
+static pid_t async_pid = 0;
+static int pseudo_sync_only = 0;
 static int server_pid = 0;
 int pseudo_localstate_dir_fd = -1;
 static int pseudo_pathlock_fd = -1;
@@ -454,8 +461,17 @@ pseudo_init_client(void) {
 	int need_free = 0;
 
 	pseudo_antimagic();
+	/* collect errors for requests this process sent; a forked child
+	 * leaves its parent's to the parent
+	 */
+	pseudo_client_flush();
+	async_pending = 0;
 	pseudo_new_pid();
 	client_disconnect();
+
+	env = pseudo_get_value("PSEUDO_SYNC");
+	pseudo_sync_only = env && *env && strcmp(env, "0");
+	free(env);
 #ifdef PSEUDO_PROFILING
 	if (pseudo_profile_fd > -1) {
 		close(pseudo_profile_fd);
@@ -1533,6 +1549,15 @@ pseudo_client_send(pseudo_msg_t *msg, size_t len, const char *path, int tries) {
 	return -1;
 }
 
+/* Send a request that needs no reply, without waiting for the server. */
+static void
+pseudo_client_send_async(pseudo_msg_t *msg, size_t len, const char *path) {
+	msg->type = PSEUDO_MSG_ASYNC;
+	pseudo_client_send(msg, len, path, 0);
+	async_pending = 1;
+	async_pid = getpid();
+}
+
 static pseudo_msg_t *
 pseudo_client_request(pseudo_msg_t *msg, size_t len, const char *path) {
 	pseudo_msg_t *response = 0;
@@ -1551,7 +1576,16 @@ pseudo_client_request(pseudo_msg_t *msg, size_t len, const char *path) {
 	for (; tries < PSEUDO_RETRIES; ++tries) {
 		tries = pseudo_client_send(msg, len, path, tries);
 		pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "sent!\n");
-		response = pseudo_msg_receive(connect_fd);
+		/* replies come back in order, so any errors for earlier
+		 * asynchronous requests arrive first
+		 */
+		while ((response = pseudo_msg_receive(connect_fd)) != NULL &&
+		       response->type == PSEUDO_MSG_ASYNC) {
+			pseudo_debug(PDBGF_CLIENT, "error for asynchronous %s: %s\n",
+				pseudo_op_name(response->op), pseudo_res_name(response->result));
+			if (response->result == RESULT_ABORT)
+				pseudo_client_abort();
+		}
 		if (!response) {
 			pseudo_debug(PDBGF_CLIENT, "expected response did not occur; retrying\n");
 			/* the connection may be gone even though the request
@@ -1559,6 +1593,8 @@ pseudo_client_request(pseudo_msg_t *msg, size_t len, const char *path) {
 			 */
 			pseudo_client_setup();
 		} else {
+			/* everything sent before this request has been handled */
+			async_pending = 0;
 			if (response->type != PSEUDO_MSG_ACK) {
 				pseudo_debug(PDBGF_CLIENT, "got non-ack response %d\n", response->type);
 				return 0;
@@ -1572,6 +1608,34 @@ pseudo_client_request(pseudo_msg_t *msg, size_t len, const char *path) {
 	pseudo_evlog_dump();
 	pseudo_critical("event log dumped, aborting.\n");
 	return 0;
+}
+
+/* Whether this process has asynchronous requests the server may not
+ * have handled yet.
+ */
+int
+pseudo_client_flush_needed(void) {
+	return async_pending && async_pid == getpid() && request_fd != -1;
+}
+
+/* Wait until the server has handled every asynchronous request this
+ * process sent, so any abort they caused happens before exec() or exit().
+ */
+void
+pseudo_client_flush(void) {
+	pseudo_msg_t msg;
+
+	if (!pseudo_client_flush_needed())
+		return;
+	pseudo_antimagic();
+	memset(&msg, 0, sizeof(msg));
+	msg.type = PSEUDO_MSG_PING;
+	msg.op = OP_NONE;
+	msg.client = getpid();
+	pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "flushing asynchronous requests\n");
+	pseudo_client_request(&msg, 0, NULL);
+	async_pending = 0;
+	pseudo_magic();
 }
 
 int
@@ -2362,8 +2426,6 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 #ifdef PSEUDO_PROFILING
 		struct timeval tv1_ipc, tv2_ipc;
 #endif
-                if (!pseudo_op_wait(msg.op))
-                        msg.type = PSEUDO_MSG_FASTOP;
 		pseudo_debug(PDBGF_CLIENT | PDBGF_VERBOSE, "sending request [ino %llu]\n", (unsigned long long) msg.ino);
 #ifdef PSEUDO_PROFILING
 		gettimeofday(&tv1_ipc, NULL);
@@ -2371,6 +2433,8 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 		if (pseudo_local_only) {
 			/* disable server */
 			result = NULL;
+		} else if (!pseudo_sync_only && pseudo_op_async(msg.op)) {
+			pseudo_client_send_async(&msg, pathlen, path);
 		} else {
 			result = pseudo_client_request(&msg, pathlen, path);
 		}
@@ -2397,7 +2461,7 @@ pseudo_client_op(pseudo_op_t op, int access, int fd, int dirfd, const char *path
 					(int) result->uid,
 					(int) result->gid);
 			}
-		} else if (msg.type != PSEUDO_MSG_FASTOP) {
+		} else if (msg.type != PSEUDO_MSG_ASYNC) {
 			pseudo_debug(PDBGF_OP, "(%d) no answer", getpid());
 		}
 	} else if (!result) {

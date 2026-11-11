@@ -4,4 +4,4 @@ shutdown
 op
 ack
 nak
-fastop
+async

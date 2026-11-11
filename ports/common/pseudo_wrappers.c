@@ -445,6 +445,24 @@ execveat(int dirfd, const char *path, char *const *argv, char *const *envp, int 
 	return rc;
 }
 
+/* _exit() skips destructors, so collect errors for requests sent
+ * without waiting here instead.
+ */
+void
+_exit(int status) {
+	pseudo_exit_flush();
+	if (real__exit)
+		real__exit(status);
+	syscall(SYS_exit_group, status);
+	for (;;)
+		;
+}
+
+/* _Exit() is equivalent to _exit(), and glibc makes it a weak alias of
+ * _exit, but callers bind to it by name, so it must be exported as well.
+ */
+void _Exit(int status) __attribute__((alias("_exit"), noreturn));
+
 /* no profiling in fork because it wouldn't work anyway
  * half the time
  */
@@ -541,6 +559,12 @@ wrap_execveat(int dirfd, const char *path, char *const *argv, char *const *envp,
 #include "guts/execveat.c"
 
 	return rc;
+}
+
+/* not used, the hand-written wrappers flush and exit directly */
+static void
+wrap__exit(int status) {
+	(void) status;
 }
 
 static int

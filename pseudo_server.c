@@ -573,7 +573,6 @@ serve_client(int i) {
 	if (in) {
 		char *response_path = 0;
 		size_t response_pathlen;
-		int send_response = 1;
 		pseudo_debug(PDBGF_SERVER | PDBGF_VERBOSE, "got a message (%d): %s\n", in->type, (in->pathlen ? in->path : "<no path>"));
 		/* handle incoming ping */
 		if (in->type == PSEUDO_MSG_PING && !clients[i].pid) {
@@ -635,20 +634,6 @@ serve_client(int i) {
 			} else {
 				in->pathlen = 0;
 			}
-			if (in->type == PSEUDO_MSG_FASTOP) {
-				/* respond instantly */
-				send_response = 0;
-				int t_type = in->type;
-				int t_pathlen = in->pathlen;
-				in->type = PSEUDO_MSG_ACK;
-				in->pathlen = 0;
-				if ((rc = pseudo_msg_send(clients[i].fd, in, in->pathlen, response_path)) != 0) {
-					pseudo_debug(PDBGF_SERVER, "failed to send response to client %d [%d]: %d (%s)\n",
-						i, (int) clients[i].pid, rc, strerror(errno));
-				}
-				in->type = t_type;
-				in->pathlen = t_pathlen;
-			}
 		} else {
 			/* the server's listen fd is "a client", and
 			 * so is the program connecting to request a shutdown.
@@ -686,13 +671,9 @@ serve_client(int i) {
 				die_peacefully = 1;
 			}
 		}
-		if (send_response) {
-			if ((rc = pseudo_msg_send(clients[i].fd, in, in->pathlen, response_path)) != 0) {
-				pseudo_debug(PDBGF_SERVER, "failed to send response to client %d [%d]: %d (%s)\n",
-					i, (int) clients[i].pid, rc, strerror(errno));
-			}
-		} else {
-			rc = 1;
+		if ((rc = pseudo_msg_send(clients[i].fd, in, in->pathlen, response_path)) != 0) {
+			pseudo_debug(PDBGF_SERVER, "failed to send response to client %d [%d]: %d (%s)\n",
+				i, (int) clients[i].pid, rc, strerror(errno));
 		}
 		free(response_path);
 	} else {
@@ -719,8 +700,10 @@ serve_client(int i) {
 	return rc;
 }
 
-/* Handle one request from the datagram socket, replying on the client's
- * stream connection.
+/* Handle one request from the datagram socket.  Synchronous requests
+ * (and PING, which a client uses to wait until everything it sent so far
+ * has been handled) get a reply on the client's stream connection.
+ * Asynchronous ones only get a reply if the client must abort.
  */
 static void
 serve_request(pseudo_msg_t *in) {
@@ -728,7 +711,7 @@ serve_request(pseudo_msg_t *in) {
 	char *response_path = 0;
 	size_t response_pathlen = -1;
 	int id = in->client_id;
-	int valid, rc;
+	int valid, reply = 1, rc;
 
 	gettimeofday(&tv1, NULL);
 	++messages;
@@ -746,7 +729,6 @@ serve_request(pseudo_msg_t *in) {
 		in->type = PSEUDO_MSG_ACK;
 		break;
 	case PSEUDO_MSG_OP:
-	case PSEUDO_MSG_FASTOP:
 		if (pseudo_server_response(in, valid ? clients[id].program : NULL,
 				valid ? clients[id].tag : NULL,
 				&response_path, &response_pathlen)) {
@@ -755,12 +737,18 @@ serve_request(pseudo_msg_t *in) {
 			in->type = PSEUDO_MSG_ACK;
 		}
 		break;
+	case PSEUDO_MSG_ASYNC:
+		pseudo_server_response(in, valid ? clients[id].program : NULL,
+			valid ? clients[id].tag : NULL,
+			&response_path, &response_pathlen);
+		reply = (in->result == RESULT_ABORT);
+		break;
 	default:
 		pdb_log_msg(SEVERITY_WARN, in, NULL, NULL, "invalid request type %d", in->type);
 		in->type = PSEUDO_MSG_NAK;
 		break;
 	}
-	if (valid) {
+	if (reply && valid) {
 		pseudo_debug(PDBGF_SERVER | PDBGF_VERBOSE, "response: %d (%s)\n",
 			in->result, pseudo_res_name(in->result));
 		in->client = id;
