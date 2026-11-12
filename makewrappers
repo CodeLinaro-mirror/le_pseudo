@@ -262,6 +262,10 @@ class Function:
         # In those cases, use a suffix ('_int') for the path variable names instead of
         # overwriting them. This means the wrapper needs to handle paths itself.
         self.preserve_paths = False
+        # Leave an empty path unchanged instead of resolving it to dirfd's
+        # path, for functions where only a flag (e.g. O_EMPTYPATH) makes
+        # an empty path name dirfd.
+        self.keep_empty_path = False
     
         function, comments = line.split(';')
         comment = re.search(r'/\* *(.*) *\*/', comments)
@@ -427,9 +431,12 @@ class Function:
             if self.preserve_paths and self.noignore_path:
                 # path_int is only read by the ignore_paths() check
                 continue
-            fix_paths.append(
-                "%s = pseudo_root_path(__func__, __LINE__, %s%s, %s, %s);" %
-                (pathvar, prefix, self.dirfd, path, self.flags))
+            munge = "%s = pseudo_root_path(__func__, __LINE__, %s%s, %s, %s);" % \
+                (pathvar, prefix, self.dirfd, path, self.flags)
+            if self.keep_empty_path:
+                # see above for the asm()
+                munge = "asm(\"\" : \"+r\"(%s));\n\t\tif (!%s || *%s)\n\t\t\t%s" % (path, path, path, munge)
+            fix_paths.append(munge)
         return "\n\t\t".join(fix_paths)
 
     def ignore_paths(self):

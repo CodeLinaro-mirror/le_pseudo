@@ -13,6 +13,17 @@
 	int existed = 1;
 	int save_errno;
 	sigset_t local_saved_sigmask;
+	const char *record_path = path;
+	int stat_flags = (flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0;
+
+	/* An empty path is left for the kernel, which only accepts it with
+	 * O_EMPTYPATH, to reopen dirfd.  Look at and record dirfd instead.
+	 */
+	if (path && !*path) {
+		stat_flags |= AT_EMPTY_PATH;
+		record_path = pseudo_root_path(__func__, __LINE__, dirfd,
+			dirfd == AT_FDCWD ? "." : "", 0);
+	}
 
 	/* mask out mode bits appropriately */
 	mode = mode & ~pseudo_umask;
@@ -47,7 +58,7 @@
 	/* note "else" in #ifdef O_TMPFILE above */
 	if (flags & O_CREAT) {
 		save_errno = errno;
-		rc = base_fstatat(dirfd, path, &buf, (flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0);
+		rc = base_fstatat(dirfd, path, &buf, stat_flags);
 		existed = (rc != -1);
 		if (!existed)
 			pseudo_debug(PDBGF_FILE, "openat_creat: %s -> 0%o\n", path, mode);
@@ -60,7 +71,7 @@
 	 */
 	if (!(flags & O_NONBLOCK) && ((flags & (O_WRONLY | O_RDONLY | O_RDWR)) != O_RDWR)) {
 		save_errno = errno;
-		rc = base_fstatat(dirfd, path, &buf, (flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0);
+		rc = base_fstatat(dirfd, path, &buf, stat_flags);
 		if (rc != -1 && S_ISFIFO(buf.st_mode)) {
 			overly_magic_nonblocking = 1;
 		}
@@ -105,7 +116,7 @@
 			return rc;
 		}
 #endif
-		stat_rc = base_fstatat(dirfd, path, &buf, (flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0);
+		stat_rc = base_fstatat(dirfd, path, &buf, stat_flags);
 
 		pseudo_debug(PDBGF_FILE, "openat(path %s), flags %o, stat rc %d, stat mode %o\n",
 			path, flags, stat_rc, buf.st_mode);
@@ -122,11 +133,11 @@
 				}
 				pseudo_client_path_unlock(path_lock_fd);
 			}
-				pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(flags), rc, dirfd, path, &buf);
+				pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(flags), rc, dirfd, record_path, &buf);
 		} else {
 			pseudo_debug(PDBGF_FILE, "openat (fd %d, path %d/%s, flags %d) succeeded, but stat failed (%s).\n",
 				rc, dirfd, path, flags, strerror(errno));
-			pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(flags), rc, dirfd, path, 0);
+			pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(flags), rc, dirfd, record_path, 0);
 		}
 		errno = save_errno;
 	}
