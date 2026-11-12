@@ -15,6 +15,8 @@
 	sigset_t local_saved_sigmask;
 	struct open_how my_how;
 	char *pseudo_path;
+	const char *stat_path, *record_path;
+	int stat_flags;
 
 	/* Validate parameters */
 	if (!how || size < sizeof(struct open_how)) {
@@ -40,6 +42,18 @@
 	        path = pseudo_path;
 
 	memcpy(&my_how, how, size);
+
+	stat_path = record_path = pseudo_path;
+	stat_flags = (my_how.flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0;
+	/* An empty path is passed to the kernel, which only accepts it with
+	 * O_EMPTYPATH, to reopen dirfd.  Look at and record dirfd instead.
+	 */
+	if (path && !*path) {
+		stat_path = "";
+		stat_flags |= AT_EMPTY_PATH;
+		record_path = pseudo_root_path(__func__, __LINE__, dirfd,
+			dirfd == AT_FDCWD ? "." : "", 0);
+	}
 
 	/* mask out mode bits appropriately */
 	my_how.mode = my_how.mode & ~pseudo_umask;
@@ -81,7 +95,7 @@
 	/* note "else" in #ifdef O_TMPFILE above */
 	if (my_how.flags & O_CREAT) {
 		save_errno = errno;
-		rc = base_fstatat(dirfd, pseudo_path, &buf, (my_how.flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0);
+		rc = base_fstatat(dirfd, stat_path, &buf, stat_flags);
 		existed = (rc != -1);
 		if (!existed)
 			pseudo_debug(PDBGF_FILE, "openat2_creat: %s -> 0%lld\n", pseudo_path, my_how.mode);
@@ -94,7 +108,7 @@
 	 */
 	if (!(my_how.flags & O_NONBLOCK) && ((my_how.flags & (O_WRONLY | O_RDONLY | O_RDWR)) != O_RDWR)) {
 		save_errno = errno;
-		rc = base_fstatat(dirfd, pseudo_path, &buf, (my_how.flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0);
+		rc = base_fstatat(dirfd, stat_path, &buf, stat_flags);
 		if (rc != -1 && S_ISFIFO(buf.st_mode)) {
 			overly_magic_nonblocking = 1;
 		}
@@ -151,7 +165,7 @@
 			return rc;
 		}
 #endif
-		stat_rc = base_fstatat(dirfd, pseudo_path, &buf, (my_how.flags & O_NOFOLLOW) ? AT_SYMLINK_NOFOLLOW : 0);
+		stat_rc = base_fstatat(dirfd, stat_path, &buf, stat_flags);
 
 		pseudo_debug(PDBGF_FILE, "openat2(path %s), flags %lld, stat rc %d, stat mode %o\n",
 			pseudo_path, my_how.flags, stat_rc, buf.st_mode);
@@ -168,11 +182,11 @@
 				}
 				pseudo_client_path_unlock(path_lock_fd);
 			}
-				pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(my_how.flags), rc, dirfd, pseudo_path, &buf);
+				pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(my_how.flags), rc, dirfd, record_path, &buf);
 		} else {
 			pseudo_debug(PDBGF_FILE, "openat2 (fd %d, path %d/%s, flags %lld) succeeded, but stat failed (%s).\n",
 				rc, dirfd, pseudo_path, my_how.flags, strerror(errno));
-			pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(my_how.flags), rc, dirfd, pseudo_path, 0);
+			pseudo_client_op(OP_OPEN, PSEUDO_ACCESS(my_how.flags), rc, dirfd, record_path, 0);
 		}
 		errno = save_errno;
 	}
