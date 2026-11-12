@@ -17,3 +17,4 @@ func_deps.mk
 port_deps.mk
 test/test-*
 !test/test-*.*
+test/*.so

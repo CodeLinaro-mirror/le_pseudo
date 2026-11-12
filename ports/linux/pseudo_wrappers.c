@@ -47,6 +47,29 @@ pseudo_mknodat(int dirfd, const char *path, mode_t mode, dev_t dev) {
 	return real___xmknodat(_MKNOD_VER, dirfd, path, mode, &dev);
 }
 
+/* The host's is_selinux_enabled() and is_selinux_mls_enabled(), used only
+ * while pseudo is disabled.  They are in libselinux, which may not be loaded
+ * when the wrappers are set up, or at all, so look them up when they are
+ * needed.  Without libselinux, SELinux isn't in use.
+ */
+int
+pseudo_is_selinux_enabled(void) {
+	static int (*f)(void) = NULL;
+
+	if (!f)
+		f = (int (*)(void)) dlsym(RTLD_NEXT, "is_selinux_enabled");
+	return f ? f() : 0;
+}
+
+int
+pseudo_is_selinux_mls_enabled(void) {
+	static int (*f)(void) = NULL;
+
+	if (!f)
+		f = (int (*)(void)) dlsym(RTLD_NEXT, "is_selinux_mls_enabled");
+	return f ? f() : 0;
+}
+
 int pseudo_capset(cap_user_header_t hdrp, const cap_user_data_t datap) {
 	(void)hdrp;
 	(void)datap;

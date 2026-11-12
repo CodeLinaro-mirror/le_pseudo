@@ -84,6 +84,14 @@ test-verbose: all $(TESTS) | $(BIN) $(LIB)
 test/test-%: test/test-%.c
 	$(CC) $(CFLAGS) $(CFLAGS_PSEUDO) -o $@ $<
 
+# test-selinux-disabled loads libselinux, or a stand-in reporting SELinux as
+# enabled, at run time.
+test/libfake-selinux.so: test/fake-selinux.c
+	$(CC) $(CFLAGS) $(CFLAGS_PSEUDO) -shared -o $@ $<
+
+test/test-selinux-disabled: test/test-selinux-disabled.c test/libfake-selinux.so
+	$(CC) $(CFLAGS) $(CFLAGS_PSEUDO) -o $@ $< -ldl
+
 install-lib: $(LIBPSEUDO)
 	mkdir -p $(DESTDIR)$(LIBDIR)
 	cp $(LIBPSEUDO) $(DESTDIR)$(LIBDIR)
@@ -176,7 +184,7 @@ pseudo_profile: Makefile pseudo_profile.c tables wrappers
 
 clean:
 	rm -f *.o $(LIBPSEUDO) $(PSEUDO) $(PSEUDODB) $(PSEUDOLOG) \
-		$(TESTS) \
+		$(TESTS) test/libfake-selinux.so \
 		pseudo_wrapfuncs.h pseudo_wrapfuncs.c \
 		pseudo_wrapper_table.c \
 		pseudo_tables.c pseudo_tables.h \
