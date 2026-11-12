@@ -197,6 +197,11 @@ syscall(long number, ...) {
 	    && number != SYS_landlock_add_rule
 	    && number != SYS_landlock_restrict_self
 #endif
+#ifdef SYS_io_uring_setup
+	    && number != SYS_io_uring_setup
+	    && number != SYS_io_uring_enter
+	    && number != SYS_io_uring_register
+#endif
 	    ) {
 		if (!real_syscall)
 			real_syscall = (long (*)(long, ...)) dlsym(RTLD_NEXT, "syscall");
@@ -237,6 +242,21 @@ syscall(long number, ...) {
 	    number == SYS_landlock_add_rule ||
 	    number == SYS_landlock_restrict_self) {
 		pseudo_debug(PDBGF_SYSCALL, "syscall, refusing landlock.\n");
+		errno = ENOSYS;
+		return -1;
+	}
+#endif
+
+#ifdef SYS_io_uring_setup
+	/* Operations submitted through an io_uring never pass through
+	 * libpseudo, so files they create or change aren't tracked
+	 * (YOCTO #15244).  Report io_uring as unsupported, as a kernel
+	 * without it does, so callers fall back to ordinary calls.
+	 */
+	if (number == SYS_io_uring_setup ||
+	    number == SYS_io_uring_enter ||
+	    number == SYS_io_uring_register) {
+		pseudo_debug(PDBGF_SYSCALL, "syscall, refusing io_uring.\n");
 		errno = ENOSYS;
 		return -1;
 	}
