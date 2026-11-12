@@ -169,6 +169,25 @@ to programs pseudo does not intercept (see section 1), and the Landlock
 calls reach the kernel while PSEUDO_DISABLED is set.
 
 
+8. SELINUX IS REPORTED AS DISABLED
+
+SELinux-aware programs, such as install, label the files they create
+from the host's policy.  Under pseudo the label is only recorded, which
+is wrong for target files, and a program that hands a recorded label
+back to the kernel, as sed -i does through /proc/self/attr/fscreate, can
+be refused (YOCTO #6580).  So under pseudo, is_selinux_enabled() and
+is_selinux_mls_enabled() report SELinux as disabled, and these programs
+behave as on a host without SELinux.  Labels set explicitly, for
+example by setfiles when labelling an image, are still recorded.  The
+host's answer is only given while PSEUDO_DISABLED is set.
+
+The kernel still enforces the host's policy on everything pseudo does
+for real.  A build running in a confined SELinux domain, such as
+user_t, can have file operations refused that an unconfined user is
+allowed, and is not supported.  When the server starts with SELinux
+enforcing in a confined domain, it says so in its log.
+
+
 RECOMMENDATIONS:
 
 * Run pseudo only on build output that is private to the build and is
@@ -183,3 +202,4 @@ RECOMMENDATIONS:
   security relevant files in the final image.
 * Where pseudo cannot install its io_uring filter, disable io_uring on
   the build host with the kernel.io_uring_disabled sysctl.
+* On a host with SELinux enforcing, run builds in an unconfined domain.

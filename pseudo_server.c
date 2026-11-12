@@ -143,6 +143,65 @@ handle_sigalrm(int sig) {
 	got_sigalrm = 1;
 }
 
+/* Read a small file into buf as a string, without a trailing newline or
+ * NUL.  Returns the length, or -1.
+ */
+static ssize_t
+pseudo_read_small_file(const char *path, char *buf, size_t size) {
+	ssize_t len;
+	int fd;
+
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd == -1)
+		return -1;
+	len = read(fd, buf, size - 1);
+	close(fd);
+	if (len < 0)
+		return -1;
+	while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\0'))
+		--len;
+	buf[len] = '\0';
+	return len;
+}
+
+/* SELinux-aware programs are told SELinux is disabled (YOCTO #6580), but
+ * the kernel still enforces the policy on what pseudo does for real, and a
+ * confined domain can refuse operations an unconfined user is allowed.  That
+ * is not a supported environment, so say so in the log.  The server runs in
+ * the domain of the build that started it.
+ */
+static void
+pseudo_server_check_selinux(void) {
+	static const char *const unconfined[] = {
+		"unconfined_t", "unconfined_service_t", NULL
+	};
+	char enforce[8], context[256];
+	char *type, *end;
+	size_t len;
+	int i;
+
+	if (pseudo_read_small_file("/sys/fs/selinux/enforce", enforce, sizeof(enforce)) <= 0 ||
+	    strcmp(enforce, "1"))
+		return;
+	if (pseudo_read_small_file("/proc/self/attr/current", context, sizeof(context)) <= 0)
+		return;
+	/* user:role:type:level */
+	type = strchr(context, ':');
+	if (type)
+		type = strchr(type + 1, ':');
+	if (!type)
+		return;
+	++type;
+	end = strchr(type, ':');
+	len = end ? (size_t) (end - type) : strlen(type);
+	for (i = 0; unconfined[i]; ++i) {
+		if (len == strlen(unconfined[i]) && !strncmp(type, unconfined[i], len))
+			return;
+	}
+	pseudo_warning("SELinux is enforcing and pseudo is running in the confined domain '%s'.  This is not a supported environment: the policy can refuse file operations pseudo performs, and builds may fail.  See README.security.\n",
+		context);
+}
+
 #define PSEUDO_CHILD_PROCESS_TIMEOUT 2
 int
 pseudo_server_start(int daemonize) {
@@ -244,6 +303,7 @@ pseudo_server_start(int daemonize) {
 
 	pseudo_info("pid %d [parent %d], doing new pid setup and server start\n", getpid(), getppid());
 	pseudo_new_pid();
+	pseudo_server_check_selinux();
 
 	pseudo_debug(PDBGF_SERVER, "opening lock.\n");
 	lockpath = pseudo_localstatedir_path(NULL);
