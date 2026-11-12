@@ -38,6 +38,20 @@ started pseudo.  This includes:
 A program running under pseudo can therefore always step outside of it.
 pseudo cannot be used to restrict what a program does.
 
+Files created or changed through io_uring are not seen by pseudo, so
+pseudo refuses io_uring: calls made through syscall() always fail with
+ENOSYS, and by default (PSEUDO_IO_URING_SECCOMP, see pseudo.1) a seccomp
+filter also refuses calls made directly, such as liburing's.  The filter
+can only be installed where no_new_privs is already set.  Where it is
+not, or to rule io_uring out for every process on the build host,
+including those pseudo is not loaded into, disable io_uring in the
+kernel instead:
+on Linux 6.6 and later, and some distribution kernels, the sysctl
+kernel.io_uring_disabled=2 makes io_uring_setup() fail with EPERM for
+everyone, and kernel.io_uring_disabled=1 limits it to CAP_SYS_ADMIN and
+members of kernel.io_uring_group.  The default seccomp profiles of
+container runtimes such as Docker also refuse io_uring.
+
 
 2. "ROOT" EXISTS ONLY IN THE DATABASE
 
@@ -167,3 +181,5 @@ RECOMMENDATIONS:
   ownership and mode.
 * Verify the ownership, permissions, labels and capabilities of
   security relevant files in the final image.
+* Where pseudo cannot install its io_uring filter, disable io_uring on
+  the build host with the kernel.io_uring_disabled sysctl.
