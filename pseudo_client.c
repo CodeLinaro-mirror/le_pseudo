@@ -576,6 +576,16 @@ pseudo_init_client(void) {
 					strerror(errno));
 				exit(1);
 			}
+			/* the server can't run without creating its lock,
+			 * socket, pid and database files here, so fail now
+			 * instead of repeatedly trying to start it
+			 */
+			if (faccessat(pseudo_localstate_dir_fd, ".", W_OK | X_OK, 0) == -1) {
+				pseudo_error("Local state path '%s' is not writable: %s\n",
+					pseudo_path,
+					strerror(errno));
+				exit(1);
+			}
 		}
 		free(pseudo_path);
 
@@ -996,6 +1006,22 @@ client_spawn_server(void) {
 		} else {
 			pseudo_evlog(PDBGF_CLIENT, "server startup apparently unsuccessful.  setting server pid to -1.\n");
 			server_pid = -1;
+			/* Retrying can't fix these, so stop instead of
+			 * respawning the server PSEUDO_RETRIES times.
+			 */
+			if (WIFEXITED(status)) {
+				switch (WEXITSTATUS(status)) {
+				case PSEUDO_EXIT_LOCK_PATH:
+				case PSEUDO_EXIT_PSEUDO_LOADED:
+				case PSEUDO_EXIT_PSEUDO_PREFIX:
+				case PSEUDO_EXIT_PSEUDO_INVOCATION:
+					pseudo_critical("server failed to start: %s\n",
+						pseudo_exit_status_name(WEXITSTATUS(status)));
+					break;
+				default:
+					break;
+				}
+			}
 			return 1;
 		}
 	} else {

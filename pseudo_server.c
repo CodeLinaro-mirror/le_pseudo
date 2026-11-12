@@ -252,6 +252,11 @@ pseudo_server_start(int daemonize) {
 		exit(PSEUDO_EXIT_LOCK_PATH);
 	}
 	mkdir_p(lockpath);
+	if (access(lockpath, W_OK | X_OK) == -1) {
+		pseudo_error("Local state directory '%s' is not writable, unable to create lockfile: %s\n",
+			lockpath, strerror(errno));
+		exit(PSEUDO_EXIT_LOCK_FAILED);
+	}
 	lockname = pseudo_localstatedir_path(PSEUDO_LOCKFILE);
 	if (!lockname) {
 		pseudo_error("Couldn't allocate a file path.\n");

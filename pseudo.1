@@ -703,6 +703,9 @@ database files and log files; by default, it is the
 .I var/pseudo
 directory under
 .BR PSEUDO_PREFIX .
+It must be writable; if it is not,
+.I pseudo
+fails at startup rather than trying to start the server.
 .TP 8
 .B PSEUDO_NOSYMLINKEXP
 By default, when chrooted,
