@@ -169,6 +169,10 @@ out:
 	return fd;
 }
 
+#ifdef PSEUDO_HAVE_IO_URING_SYSCALLS
+#include "pseudo_io_uring_seccomp.c"
+#endif
+
 long
 syscall(long number, ...) {
 	long rc = -1;

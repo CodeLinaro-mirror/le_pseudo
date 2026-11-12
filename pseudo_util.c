@@ -58,6 +58,8 @@ static struct pseudo_variables pseudo_env[] = {
 	{ "PSEUDO_DISABLED", 15, NULL },
 	{ "PSEUDO_UNLOAD", 13, NULL },
 	{ "PSEUDO_ALLOW_FSYNC", 18, NULL },
+	{ "PSEUDO_IO_URING_SECCOMP", 23, NULL },
+	{ "PSEUDO_IO_URING_FILTER", 22, NULL },
 #ifdef PSEUDO_PROFILING
 	{ "PSEUDO_PROFILE_PATH", 19, NULL },
 #endif

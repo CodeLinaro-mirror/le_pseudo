@@ -624,6 +624,85 @@ discarded silently, even when
 .B PSEUDO_DISABLED
 is set. The value specified doesn't matter.
 .TP 8
+.B PSEUDO_IO_URING_SECCOMP
+Selects whether
+.I pseudo
+installs a seccomp filter refusing
+.IR io_uring (7).
+.I pseudo
+cannot intercept the file operations done through io_uring, so it always
+answers
+.IR io_uring_setup (2),
+.IR io_uring_enter (2)
+and
+.IR io_uring_register (2)
+made through
+.IR syscall (3)
+with
+.BR ENOSYS ,
+whatever this variable is set to.  But it is an
+.I LD_PRELOAD
+library, and the common io_uring users do not go through libc - liburing is
+normally built with
+.I CONFIG_NOLIBC
+and issues the system calls itself, and
+.IR fio (1)
+inlines one on its submission path. Such a caller reaches the kernel directly
+and can create, rename or unlink files without
+.I pseudo
+recording any of it. There is also nothing to wrap, since libc exports no
+io_uring entry point, so a seccomp filter is used instead. The filter is
+inherited across
+.IR fork (2)
+and
+.IR execve (2),
+so one process tree needs it installed only once, including for the processes
+.I pseudo
+cannot be loaded into at all.
+.IP
+.I 0
+means passthrough: no filter is installed, so callers which make the system
+calls themselves get a working io_uring, and
+.I pseudo
+does not see the file operations they perform through it.
+.IP
+.I 1
+means deny, and is the default. The filter answers
+.IR io_uring_setup (2),
+.IR io_uring_enter (2)
+and
+.IR io_uring_register (2)
+with
+.BR ENOSYS ,
+which is what a kernel built without io_uring support answers, so callers take
+the fallback they already have for that case. Where the kernel supports
+.BR SECCOMP_FILTER_FLAG_LOG ,
+each refused call is also recorded by the kernel, in the audit log or in the
+kernel ring buffer where nothing is listening to audit. A kernel or sandbox
+which rejects that flag still gets the filter, without the records.
+.IP
+Installing a filter requires either privilege or
+.BR PR_SET_NO_NEW_PRIVS ,
+which suppresses setuid binaries and file capabilities for the process and
+everything it executes.
+.I pseudo
+never sets it, since that is not its decision to make on an application's
+behalf: where it is unset and
+.I pseudo
+is unprivileged, no filter can be installed, and callers which make the
+system call directly, rather than through
+.IR syscall (3),
+are not refused.
+.IP
+The mode, and any problem installing the filter, are reported only in the
+debug output selected by the
+.B c
+flag of
+.BR PSEUDO_DEBUG ,
+since none of them stops
+.I pseudo
+from working.
+.TP 8
 .B PSEUDO_ENOSYS_ABORT
 If this variable is set, the
 .I pseudo

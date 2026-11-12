@@ -135,6 +135,7 @@ $(LIBPSEUDO): $(WRAPOBJS) pseudo_client.o pseudo_client_scanf.o pseudo_ipc.o $(S
 $(OBJS): pseudo_tables.h
 
 pseudo_client.o pseudo_server.o pseudo_ipc.o: pseudo_ipc.h
+pseudo_wrappers.o: ports/linux/pseudo_io_uring_seccomp.c ports/linux/io_uring_syscalls.h
 
 pseudo_client.o: pseudo_client.h
 

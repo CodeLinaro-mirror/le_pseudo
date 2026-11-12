@@ -65,6 +65,12 @@ static void pseudo_sigblock(sigset_t *);
 extern char *program_invocation_short_name;
 static sigset_t pseudo_saved_sigmask;
 
+#if PSEUDO_PORT_LINUX && defined(PSEUDO_HAVE_IO_URING_SYSCALLS)
+/* Defined in ports/linux/pseudo_io_uring_seccomp.c, which is pulled in with
+ * the rest of the port's wrappers at the bottom of this file. */
+static void pseudo_io_uring_init(void);
+#endif
+
 /* Constructor only exists in libpseudo */
 static void _libpseudo_init(void) __attribute__ ((constructor));
 
@@ -114,6 +120,11 @@ _libpseudo_init(void) {
 	pseudo_init_util();
 	pseudo_init_wrappers();
 	pseudo_init_client();
+
+#if PSEUDO_PORT_LINUX && defined(PSEUDO_HAVE_IO_URING_SYSCALLS)
+	/* Needs the real_* pointers and pseudo_disabled, so it goes last. */
+	pseudo_io_uring_init();
+#endif
 
 	pseudo_magic();
 	pseudo_droplock();
